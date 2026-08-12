@@ -18,6 +18,8 @@ interface PurchaseFlowProps {
     refreshUser: () => Promise<void>;
     currentStep: number;
     activeOrder: ActiveOrder | null;
+    openAuth: () => void;
+    openAuth: () => void;
   }) => React.ReactNode;
 }
 
@@ -42,7 +44,8 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
   const [authOpen, setAuthOpen] = useState(false);
   const [pendingService, setPendingService] = useState<ServiceOption | null>(null);
   const [currentStep, setCurrentStep] = useState(-1); // -1 = idle, 0-3 = steps
-  const [activeOrder, setActiveOrder] = useState<ActiveOrder | null>(null);
+  const [activeOrder,
+        openAuth: () => setAuthOpen(true), setActiveOrder] = useState<ActiveOrder | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -302,6 +305,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
         refreshUser,
         currentStep,
         activeOrder,
+        openAuth: () => setAuthOpen(true),
       })}
 
       <AuthModal
