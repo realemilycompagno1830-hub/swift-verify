@@ -8,6 +8,7 @@ interface FooterProps {
   servicesLinks?: FooterLink[];
   supportLinks?: FooterLink[];
   copyright?: string;
+  paymentGateways?: string[];
 }
 
 export default function Footer({
@@ -25,9 +26,10 @@ export default function Footer({
     { label: "WhatsApp Status", url: "/status" },
   ],
   copyright = "© 2026 SWIFTVERIFY.NG. All Rights Reserved.",
+  paymentGateways = ["paystack", "monnify"],
 }: FooterProps) {
   return (
-    <footer className="border-t border-gray-200 mt-16 bg-white">
+    <footer className="border-t border-gray-200 mt-12 bg-white">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
           <div>
@@ -85,16 +87,21 @@ export default function Footer({
           </div>
 
           <div className="flex flex-col items-start md:items-end gap-3">
-            <div className="flex items-center gap-3">
-              {/* Payment logos placeholders */}
-              <span className="text-xs font-semibold text-gray-500 border px-2 py-1 rounded">
-                Paystack
-              </span>
-              <span className="text-xs font-semibold text-gray-500 border px-2 py-1 rounded">
-                Monnify
-              </span>
-            </div>
-            <p className="text-xs text-gray-500 text-right max-w-[200px]">
+            {paymentGateways && paymentGateways.length > 0 && (
+              <div className="flex items-center gap-3 flex-wrap">
+                {paymentGateways.includes("paystack") && (
+                  <span className="text-xs font-semibold text-gray-500 border px-2 py-1 rounded">
+                    Paystack
+                  </span>
+                )}
+                {paymentGateways.includes("monnify") && (
+                  <span className="text-xs font-semibold text-gray-500 border px-2 py-1 rounded">
+                    Monnify
+                  </span>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-gray-500 text-left md:text-right max-w-[220px]">
               {copyright}
             </p>
           </div>
