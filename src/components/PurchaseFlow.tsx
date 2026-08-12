@@ -11,18 +11,6 @@ declare global {
   }
 }
 
-interface PurchaseFlowProps {
-  children: (props: {
-    onBuy: (service: ServiceOption) => void;
-    user: { id: string; email: string; username: string; balance: number } | null;
-    refreshUser: () => Promise<void>;
-    currentStep: number;
-    activeOrder: ActiveOrder | null;
-    openAuth: () => void;
-    openAuth: () => void;
-  }) => React.ReactNode;
-}
-
 interface ActiveOrder {
   id: string;
   phone_number: string | null;
@@ -34,6 +22,17 @@ interface ActiveOrder {
   expires_at: string | null;
 }
 
+interface PurchaseFlowProps {
+  children: (props: {
+    onBuy: (service: ServiceOption) => void;
+    user: { id: string; email: string; username: string; balance: number } | null;
+    refreshUser: () => Promise<void>;
+    currentStep: number;
+    activeOrder: ActiveOrder | null;
+    openAuth: () => void;
+  }) => React.ReactNode;
+}
+
 export default function PurchaseFlow({ children }: PurchaseFlowProps) {
   const [user, setUser] = useState<{
     id: string;
@@ -43,9 +42,8 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
   } | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [pendingService, setPendingService] = useState<ServiceOption | null>(null);
-  const [currentStep, setCurrentStep] = useState(-1); // -1 = idle, 0-3 = steps
-  const [activeOrder,
-        openAuth: () => setAuthOpen(true), setActiveOrder] = useState<ActiveOrder | null>(null);
+  const [currentStep, setCurrentStep] = useState(-1);
+  const [activeOrder, setActiveOrder] = useState<ActiveOrder | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -75,7 +73,6 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
 
   useEffect(() => {
     refreshUser();
-    // Load Paystack script
     if (!document.getElementById("paystack-script")) {
       const script = document.createElement("script");
       script.id = "paystack-script";
@@ -94,7 +91,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
 
   const startPolling = (orderId: string) => {
     stopPolling();
-    setCurrentStep(2); // Wait for SMS
+    setCurrentStep(2);
     pollRef.current = setInterval(async () => {
       try {
         const res = await fetch(`/api/orders/${orderId}/check`, {
@@ -104,21 +101,40 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
         if (data.status === "completed" && data.otp_code) {
           setActiveOrder((prev) =>
             prev
-              ? { ...prev, status: "completed", otp_code: data.otp_code, phone_number: data.phone_number || prev.phone_number }
+              ? {
+                  ...prev,
+                  status: "completed",
+                  otp_code: data.otp_code,
+                  phone_number: data.phone_number || prev.phone_number,
+                }
               : null
           );
           setCurrentStep(3);
           setStatusMessage("OTP received!");
           stopPolling();
-        } else if (data.status === "cancelled" || data.status === "expired" || data.status === "refunded") {
-          setActiveOrder((prev) => (prev ? { ...prev, status: data.status } : null));
-          setStatusMessage(`Order ${data.status}. Balance refunded if applicable.`);
+        } else if (
+          data.status === "cancelled" ||
+          data.status === "expired" ||
+          data.status === "refunded"
+        ) {
+          setActiveOrder((prev) =>
+            prev ? { ...prev, status: data.status } : null
+          );
+          setStatusMessage(
+            `Order ${data.status}. Balance refunded if applicable.`
+          );
           setCurrentStep(-1);
           stopPolling();
           refreshUser();
         } else if (data.phone_number) {
           setActiveOrder((prev) =>
-            prev ? { ...prev, phone_number: data.phone_number, status: "waiting_sms" } : null
+            prev
+              ? {
+                  ...prev,
+                  phone_number: data.phone_number,
+                  status: "waiting_sms",
+                }
+              : null
           );
           setCurrentStep(2);
         }
@@ -131,10 +147,9 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
   const executePurchase = async (service: ServiceOption, userId: string) => {
     setError(null);
     setStatusMessage(null);
-    setCurrentStep(0); // Order Placed
+    setCurrentStep(0);
 
     try {
-      // 1. Check balance / fund if needed
       const supabase = createClient();
       const { data: profile } = await supabase
         .from("profiles")
@@ -146,13 +161,13 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
       const price = service.finalNaira;
 
       if (balance < price) {
-        // Need to fund
-        setStatusMessage(`Insufficient balance. Funding ₦${price.toLocaleString()}…`);
+        setStatusMessage(
+          `Insufficient balance. Funding ₦${price.toLocaleString()}…`
+        );
         await initiatePaystack(price, service, userId);
-        return; // Paystack callback will continue
+        return;
       }
 
-      // 2. Have enough balance → purchase
       await doPurchase(service);
     } catch (e: any) {
       setError(e.message || "Purchase failed");
@@ -160,17 +175,23 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     }
   };
 
-  const initiatePaystack = (amountNaira: number, service: ServiceOption, userId: string) => {
+  const initiatePaystack = (
+    amountNaira: number,
+    service: ServiceOption,
+    userId: string
+  ) => {
     return new Promise<void>((resolve, reject) => {
       if (!window.PaystackPop) {
-        reject(new Error("Paystack script not loaded. Refresh and try again."));
+        reject(
+          new Error("Paystack script not loaded. Refresh and try again.")
+        );
         return;
       }
 
       const handler = window.PaystackPop.setup({
         key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
         email: user?.email || "customer@swiftverify.ng",
-        amount: Math.round(amountNaira * 100), // kobo
+        amount: Math.round(amountNaira * 100),
         currency: "NGN",
         ref: `SV_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         metadata: {
@@ -182,7 +203,6 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
         },
         callback: async (response: any) => {
           try {
-            // Verify on server
             const res = await fetch("/api/payments/verify", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -192,11 +212,11 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
               }),
             });
             const data = await res.json();
-            if (!res.ok) throw new Error(data.error || "Payment verification failed");
+            if (!res.ok)
+              throw new Error(data.error || "Payment verification failed");
 
             await refreshUser();
             setStatusMessage("Wallet funded. Placing order…");
-            // Continue purchase
             await doPurchase(service);
             resolve();
           } catch (err: any) {
@@ -243,14 +263,13 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
       expires_at: data.expires_at || null,
     });
 
-    setCurrentStep(1); // Get Number
+    setCurrentStep(1);
     await refreshUser();
 
     if (data.phone_number) {
       setCurrentStep(2);
     }
 
-    // Start polling for OTP
     startPolling(data.orderId);
   };
 
@@ -273,7 +292,6 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
   }) => {
     setAuthOpen(false);
     await refreshUser();
-    // Re-fetch full user with balance
     const supabase = createClient();
     const { data: profile } = await supabase
       .from("profiles")
@@ -318,13 +336,10 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
         title="Quick Signup to Buy"
       />
 
-      {/* Active order / status overlay */}
       {(activeOrder || statusMessage || error) && (
         <div className="fixed bottom-4 left-4 right-4 md:left-auto md:right-6 md:w-96 z-50">
           <div className="bg-white border border-gray-200 rounded-xl shadow-lg p-4">
-            {error && (
-              <p className="text-sm text-red-600 mb-2">{error}</p>
-            )}
+            {error && <p className="text-sm text-red-600 mb-2">{error}</p>}
             {statusMessage && (
               <p className="text-sm text-gray-700 mb-2">{statusMessage}</p>
             )}
@@ -352,11 +367,12 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
                     </p>
                   </div>
                 )}
-                {activeOrder.status === "waiting_sms" && !activeOrder.otp_code && (
-                  <p className="text-xs text-amber-600 animate-pulse">
-                    Waiting for SMS… (auto-cancels after ~15 min)
-                  </p>
-                )}
+                {activeOrder.status === "waiting_sms" &&
+                  !activeOrder.otp_code && (
+                    <p className="text-xs text-amber-600 animate-pulse">
+                      Waiting for SMS… (auto-cancels after ~15 min)
+                    </p>
+                  )}
                 <button
                   onClick={() => {
                     stopPolling();
