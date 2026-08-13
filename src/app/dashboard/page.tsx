@@ -37,6 +37,8 @@ export default function UserDashboardPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [tab, setTab] = useState<"orders" | "transactions">("orders");
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const supabase = createClient();
@@ -83,9 +85,55 @@ export default function UserDashboardPage() {
     setLoading(false);
   }, [router]);
 
+  const cancelOrder = async (orderId: string) => {
+    if (!confirm("Cancel this order and get a refund?")) return;
+    setCancellingId(orderId);
+    setActionMessage(null);
+    try {
+      const res = await fetch(`/api/orders/${orderId}/cancel`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Cancel failed");
+      setActionMessage(
+        `Order cancelled. ₦${Number(data.refunded).toLocaleString()} refunded.`
+      );
+      await load();
+    } catch (e: any) {
+      setActionMessage(e.message || "Could not cancel order");
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
   useEffect(() => {
     load();
-    const interval = setInterval(load, 8000);
+
+    const interval = setInterval(async () => {
+      try {
+        const supabase = createClient();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const { data } = await supabase
+          .from("orders")
+          .select("id")
+          .eq("user_id", user.id)
+          .in("status", ["waiting_sms", "pending"]);
+
+        if (data) {
+          for (const o of data) {
+            try {
+              await fetch(`/api/orders/${o.id}/check`, { method: "POST" });
+            } catch (_) {}
+          }
+        }
+        await load();
+      } catch (_) {}
+    }, 8000);
+
     return () => clearInterval(interval);
   }, [load]);
 
@@ -178,6 +226,12 @@ export default function UserDashboardPage() {
           </button>
         </div>
 
+        {actionMessage && (
+          <div className="mb-4 bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg px-4 py-2">
+            {actionMessage}
+          </div>
+        )}
+
         <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <p className="text-xs text-gray-500 uppercase tracking-wide">
@@ -251,9 +305,22 @@ export default function UserDashboardPage() {
                     )
                   )}
 
-                  <p className="text-xs text-gray-400 mt-2">
-                    Cost: ₦{Number(o.cost_naira).toLocaleString()}
-                  </p>
+                  <div className="flex items-center justify-between mt-2">
+                    <p className="text-xs text-gray-400">
+                      Cost: ₦{Number(o.cost_naira).toLocaleString()}
+                    </p>
+                    {(o.status === "waiting_sms" || o.status === "pending") && (
+                      <button
+                        onClick={() => cancelOrder(o.id)}
+                        disabled={cancellingId === o.id}
+                        className="text-xs text-red-600 border border-red-200 hover:bg-red-50 px-2.5 py-1 rounded disabled:opacity-50"
+                      >
+                        {cancellingId === o.id
+                          ? "Cancelling…"
+                          : "Cancel & Refund"}
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -328,6 +395,16 @@ export default function UserDashboardPage() {
                           >
                             {o.status}
                           </span>
+                          {(o.status === "waiting_sms" ||
+                            o.status === "pending") && (
+                            <button
+                              onClick={() => cancelOrder(o.id)}
+                              disabled={cancellingId === o.id}
+                              className="block mt-1 text-xs text-red-600 underline disabled:opacity-50"
+                            >
+                              {cancellingId === o.id ? "Cancelling…" : "Cancel"}
+                            </button>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           ₦{Number(o.cost_naira).toLocaleString()}
