@@ -11,6 +11,7 @@ interface MenuItem {
 
 interface HeaderProps {
   logoText?: string;
+  logoUrl?: string;
   menuItems?: MenuItem[];
   isLoggedIn?: boolean;
   username?: string;
@@ -20,6 +21,7 @@ interface HeaderProps {
 
 export default function Header({
   logoText = "SWIFTVERIFY.NG",
+  logoUrl,
   menuItems = [
     { label: "Home", url: "/" },
     { label: "SMS Verification", url: "/" },
@@ -33,7 +35,7 @@ export default function Header({
 }: HeaderProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const logoParts = logoText.split(".");
+  const logoParts = (logoText || "SWIFTVERIFY.NG").split(".");
   const mainPart = logoParts[0] || logoText;
   const restPart = logoParts.length > 1 ? "." + logoParts.slice(1).join(".") : "";
 
@@ -42,11 +44,19 @@ export default function Header({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14 sm:h-16">
           {/* Logo */}
-          <Link href="/" className="flex items-center gap-1 shrink-0">
-            <span className="text-lg sm:text-xl font-bold tracking-tight">
-              <span className="text-red-600">{mainPart}</span>
-              <span className="text-black">{restPart}</span>
-            </span>
+          <Link href="/" className="flex items-center gap-2 shrink-0">
+            {logoUrl ? (
+              <img
+                src={logoUrl}
+                alt={logoText || "Logo"}
+                className="h-8 sm:h-9 w-auto object-contain"
+              />
+            ) : (
+              <span className="text-lg sm:text-xl font-bold tracking-tight">
+                <span className="text-red-600">{mainPart}</span>
+                <span className="text-black">{restPart}</span>
+              </span>
+            )}
           </Link>
 
           {/* Desktop Nav */}
@@ -83,7 +93,10 @@ export default function Header({
                     <strong>{username}</strong>
                   </span>
                   <span className="font-semibold text-green-700">
-                    ₦{Number(balance).toLocaleString("en-NG", { minimumFractionDigits: 2 })}
+                    ₦
+                    {Number(balance).toLocaleString("en-NG", {
+                      minimumFractionDigits: 2,
+                    })}
                   </span>
                 </div>
                 <Link
@@ -102,24 +115,37 @@ export default function Header({
               </button>
             )}
 
-            {/* Mobile menu button */}
             <button
               className="md:hidden p-2"
               onClick={() => setMobileOpen(!mobileOpen)}
               aria-label="Toggle menu"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
                 {mobileOpen ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
                 ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 6h16M4 12h16M4 18h16"
+                  />
                 )}
               </svg>
             </button>
           </div>
         </div>
 
-        {/* Mobile Nav */}
         {mobileOpen && (
           <div className="md:hidden pb-4 space-y-1 border-t border-gray-100 pt-3">
             {menuItems.map((item) =>
