@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 
 export default function GlobalSettingsPage() {
   const [logoText, setLogoText] = useState("SWIFTVERIFY.NG");
+  const [logoUrl, setLogoUrl] = useState("");
   const [headline, setHeadline] = useState("");
   const [subtitle, setSubtitle] = useState("");
   const [announcement, setAnnouncement] = useState("");
@@ -29,6 +30,7 @@ export default function GlobalSettingsPage() {
     data?.forEach((row) => {
       if (row.key === "brand") {
         setLogoText(row.value?.logo_text || "SWIFTVERIFY.NG");
+        setLogoUrl(row.value?.logo_url || "");
       }
       if (row.key === "headline") {
         setHeadline(row.value?.title || "");
@@ -49,7 +51,12 @@ export default function GlobalSettingsPage() {
       const updates = [
         {
           key: "brand",
-          value: { logo_text: logoText, logo_color: "#DC2626", site_name: "Swift Verify" },
+          value: {
+            logo_text: logoText,
+            logo_url: logoUrl.trim() || null,
+            logo_color: "#DC2626",
+            site_name: "Swift Verify",
+          },
         },
         {
           key: "headline",
@@ -68,7 +75,7 @@ export default function GlobalSettingsPage() {
         });
         if (error) throw error;
       }
-      setMessage("Settings saved");
+      setMessage("Settings saved successfully");
     } catch (e: any) {
       setMessage(e.message);
     } finally {
@@ -80,17 +87,17 @@ export default function GlobalSettingsPage() {
 
   return (
     <div className="space-y-8 max-w-2xl">
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Global Settings</h2>
           <p className="text-sm text-gray-500 mt-1">
-            Brand, homepage headline and announcement banner.
+            Brand, logo, homepage headline and announcement.
           </p>
         </div>
         <button
           onClick={save}
           disabled={saving}
-          className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-semibold px-5 py-2.5 rounded-lg"
+          className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-semibold px-5 py-2.5 rounded-lg shrink-0"
         >
           {saving ? "Saving…" : "Save Changes"}
         </button>
@@ -102,8 +109,37 @@ export default function GlobalSettingsPage() {
         </div>
       )}
 
+      {/* Logo Image URL */}
       <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
-        <h3 className="font-semibold text-sm">Brand / Logo Text</h3>
+        <h3 className="font-semibold text-sm">Logo Image (Recommended)</h3>
+        <input
+          value={logoUrl}
+          onChange={(e) => setLogoUrl(e.target.value)}
+          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+          placeholder="https://example.com/your-logo.png"
+        />
+        <p className="text-xs text-gray-500">
+          Paste a direct link to your logo image (PNG or JPG).  
+          If this is filled, the image will be shown instead of the text logo.
+        </p>
+        {logoUrl && (
+          <div className="pt-2">
+            <p className="text-xs text-gray-500 mb-2">Preview:</p>
+            <img
+              src={logoUrl}
+              alt="Logo preview"
+              className="h-10 object-contain border border-gray-100 rounded p-1"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+              }}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Text Logo (fallback) */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
+        <h3 className="font-semibold text-sm">Text Logo (used if no image)</h3>
         <input
           value={logoText}
           onChange={(e) => setLogoText(e.target.value)}
@@ -118,11 +154,12 @@ export default function GlobalSettingsPage() {
       <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
         <h3 className="font-semibold text-sm">Homepage Headline</h3>
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Title</label>
+          <label className="block text-xs text-gray-500 mb-1">Main Title</label>
           <input
             value={headline}
             onChange={(e) => setHeadline(e.target.value)}
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            placeholder="GET INSTANT VIRTUAL NUMBERS FOR VERIFICATION"
           />
         </div>
         <div>
@@ -132,28 +169,27 @@ export default function GlobalSettingsPage() {
             onChange={(e) => setSubtitle(e.target.value)}
             rows={2}
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            placeholder="WhatsApp, Telegram, OpenAI..."
           />
         </div>
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-sm">Announcement</h3>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={announcementEnabled}
-              onChange={(e) => setAnnouncementEnabled(e.target.checked)}
-            />
-            Enabled
-          </label>
-        </div>
+        <h3 className="font-semibold text-sm">Announcement Banner</h3>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={announcementEnabled}
+            onChange={(e) => setAnnouncementEnabled(e.target.checked)}
+          />
+          Show announcement
+        </label>
         <textarea
           value={announcement}
           onChange={(e) => setAnnouncement(e.target.value)}
           rows={2}
           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-          placeholder="NOTICE: New numbers added…"
+          placeholder="NOTICE: New US WhatsApp numbers added..."
         />
       </div>
     </div>
