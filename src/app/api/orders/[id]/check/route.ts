@@ -31,8 +31,11 @@ export async function POST(
       return NextResponse.json({ error: "Order not found" }, { status: 404 });
     }
 
-    // Already done
-    if (order.status === "completed" || order.otp_code) {
+    // Already finished – do not process again
+    if (
+      ["completed", "cancelled", "expired", "refunded"].includes(order.status) ||
+      order.otp_code
+    ) {
       return NextResponse.json({
         status: order.status,
         otp_code: order.otp_code,
