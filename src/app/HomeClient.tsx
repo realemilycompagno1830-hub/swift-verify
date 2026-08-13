@@ -27,7 +27,7 @@ interface InitialSettings {
 export default function HomeClient({ settings }: { settings: InitialSettings }) {
   return (
     <PurchaseFlow>
-      {({ onBuy, user, currentStep, openAuth }) => (
+      {({ onBuy, onFund, user, currentStep, openAuth }) => (
         <div className="min-h-screen flex flex-col bg-white">
           <Header
             logoText={settings.logoText}
@@ -60,6 +60,7 @@ export default function HomeClient({ settings }: { settings: InitialSettings }) 
                     <WalletCard
                       username={user.username}
                       balance={user.balance}
+                      onFund={onFund}
                       announcement={
                         settings.announcementEnabled
                           ? settings.announcement
