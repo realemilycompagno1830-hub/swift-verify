@@ -7,6 +7,7 @@ import AuthModal from "./AuthModal";
 
 declare global {
   interface Window {
+    FlutterwaveCheckout?: any;
     PaystackPop?: any;
   }
 }
@@ -48,6 +49,12 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Active payment provider (change via env variable)
+  const paymentProvider =
+    (typeof process !== "undefined" &&
+      process.env.NEXT_PUBLIC_PAYMENT_PROVIDER) ||
+    "paystack";
+
   const refreshUser = useCallback(async () => {
     const supabase = createClient();
     const {
@@ -73,10 +80,21 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
 
   useEffect(() => {
     refreshUser();
+
+    // Load Paystack script
     if (!document.getElementById("paystack-script")) {
       const script = document.createElement("script");
       script.id = "paystack-script";
       script.src = "https://js.paystack.co/v1/inline.js";
+      script.async = true;
+      document.body.appendChild(script);
+    }
+
+    // Load Flutterwave script (for later switching)
+    if (!document.getElementById("flutterwave-script")) {
+      const script = document.createElement("script");
+      script.id = "flutterwave-script";
+      script.src = "https://checkout.flutterwave.com/v3.js";
       script.async = true;
       document.body.appendChild(script);
     }
@@ -164,7 +182,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
         setStatusMessage(
           `Insufficient balance. Funding ₦${price.toLocaleString()}…`
         );
-        await initiatePaystack(price, service, userId);
+        await initiatePayment(price, service, userId);
         return;
       }
 
@@ -175,6 +193,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     }
   };
 
+  // ---------- PAYSTACK ----------
   const initiatePaystack = (
     amountNaira: number,
     service: ServiceOption,
@@ -183,23 +202,28 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     return new Promise<void>((resolve, reject) => {
       if (!window.PaystackPop) {
         reject(
-          new Error("Paystack script not loaded. Refresh and try again.")
+          new Error("Paystack script not loaded. Please refresh and try again.")
         );
         return;
       }
 
+      const publicKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY;
+      if (!publicKey) {
+        reject(new Error("Paystack public key is missing."));
+        return;
+      }
+
       const handler = window.PaystackPop.setup({
-        key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
+        key: publicKey,
         email: user?.email || "customer@swiftverify.ng",
-        amount: Math.round(amountNaira * 100),
+        amount: Math.round(amountNaira * 100), // kobo
         currency: "NGN",
-        ref: `SV_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        ref: `SV_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
         metadata: {
           user_id: userId,
           purpose: "wallet_fund",
           service_name: service.serviceName,
           country_code: service.countryCode,
-          intended_price: amountNaira,
         },
         callback: async (response: any) => {
           try {
@@ -209,11 +233,11 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
               body: JSON.stringify({
                 reference: response.reference,
                 amount: amountNaira,
+                provider: "paystack",
               }),
             });
             const data = await res.json();
-            if (!res.ok)
-              throw new Error(data.error || "Payment verification failed");
+            if (!res.ok) throw new Error(data.error || "Payment verification failed");
 
             await refreshUser();
             setStatusMessage("Wallet funded. Placing order…");
@@ -233,6 +257,104 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
       });
       handler.openIframe();
     });
+  };
+
+  // ---------- FLUTTERWAVE ----------
+  const initiateFlutterwave = (
+    amountNaira: number,
+    service: ServiceOption,
+    userId: string
+  ) => {
+    return new Promise<void>((resolve, reject) => {
+      if (!window.FlutterwaveCheckout) {
+        reject(
+          new Error(
+            "Flutterwave script not loaded. Please refresh and try again."
+          )
+        );
+        return;
+      }
+
+      const publicKey = process.env.NEXT_PUBLIC_FLUTTERWAVE_PUBLIC_KEY;
+      if (!publicKey) {
+        reject(new Error("Flutterwave public key is missing."));
+        return;
+      }
+
+      const txRef = `SV_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+      window.FlutterwaveCheckout({
+        public_key: publicKey,
+        tx_ref: txRef,
+        amount: amountNaira,
+        currency: "NGN",
+        payment_options: "card,banktransfer,ussd,mobilemoney",
+        customer: {
+          email: user?.email || "customer@swiftverify.ng",
+          name: user?.username || "Customer",
+        },
+        customizations: {
+          title: "Swift Verify",
+          description: `Fund wallet for ${service.serviceName}`,
+        },
+        meta: {
+          user_id: userId,
+          purpose: "wallet_fund",
+        },
+        callback: async (response: any) => {
+          try {
+            if (
+              response.status !== "successful" &&
+              response.status !== "completed"
+            ) {
+              setStatusMessage("Payment was not successful");
+              setCurrentStep(-1);
+              resolve();
+              return;
+            }
+
+            const res = await fetch("/api/payments/verify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                reference: response.tx_ref || txRef,
+                amount: amountNaira,
+                provider: "flutterwave",
+              }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Payment verification failed");
+
+            await refreshUser();
+            setStatusMessage("Wallet funded. Placing order…");
+            await doPurchase(service);
+            resolve();
+          } catch (err: any) {
+            setError(err.message);
+            setCurrentStep(-1);
+            reject(err);
+          }
+        },
+        onclose: () => {
+          setStatusMessage("Payment cancelled");
+          setCurrentStep(-1);
+          resolve();
+        },
+      });
+    });
+  };
+
+  // Choose which gateway to use
+  const initiatePayment = (
+    amountNaira: number,
+    service: ServiceOption,
+    userId: string
+  ) => {
+    if (paymentProvider === "flutterwave") {
+      return initiateFlutterwave(amountNaira, service, userId);
+    }
+    // Default: Paystack
+    return initiatePaystack(amountNaira, service, userId);
   };
 
   const doPurchase = async (service: ServiceOption) => {
