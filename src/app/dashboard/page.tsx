@@ -116,6 +116,13 @@ export default function UserDashboardPage() {
     setBooting(false);
   }, [router]);
 
+  const handleLogout = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/");
+    router.refresh();
+  };
+
   const cancelOrder = async (orderId: string) => {
     if (!confirm("Cancel this order and get a refund?")) return;
     setCancellingId(orderId);
@@ -250,6 +257,12 @@ export default function UserDashboardPage() {
                   className="text-sm text-gray-600 border border-gray-300 px-3 py-1.5 rounded hover:bg-white"
                 >
                   Refresh
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className="text-sm text-red-600 border border-red-200 px-3 py-1.5 rounded hover:bg-red-50"
+                >
+                  Log out
                 </button>
               </div>
             </div>
@@ -509,7 +522,7 @@ export default function UserDashboardPage() {
             )}
           </main>
 
-          <Footer />
+          <Footer paymentGateways={[]} companyLinks={[]} servicesLinks={[]} supportLinks={[]} copyright="© 2026 SWIFTVERIFY.NG. All Rights Reserved." />
         </div>
       )}
     </PurchaseFlow>
