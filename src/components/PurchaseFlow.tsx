@@ -26,6 +26,7 @@ interface ActiveOrder {
 interface PurchaseFlowProps {
   children: (props: {
     onBuy: (service: ServiceOption) => void;
+    onFund: (amount?: number) => void;
     user: { id: string; email: string; username: string; balance: number } | null;
     refreshUser: () => Promise<void>;
     currentStep: number;
@@ -43,13 +44,13 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
   } | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [pendingService, setPendingService] = useState<ServiceOption | null>(null);
+  const [pendingFundAmount, setPendingFundAmount] = useState<number | null>(null);
   const [currentStep, setCurrentStep] = useState(-1);
   const [activeOrder, setActiveOrder] = useState<ActiveOrder | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Active payment provider (change via env variable)
   const paymentProvider =
     (typeof process !== "undefined" &&
       process.env.NEXT_PUBLIC_PAYMENT_PROVIDER) ||
@@ -81,7 +82,6 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
   useEffect(() => {
     refreshUser();
 
-    // Load Paystack script
     if (!document.getElementById("paystack-script")) {
       const script = document.createElement("script");
       script.id = "paystack-script";
@@ -90,7 +90,6 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
       document.body.appendChild(script);
     }
 
-    // Load Flutterwave script (for later switching)
     if (!document.getElementById("flutterwave-script")) {
       const script = document.createElement("script");
       script.id = "flutterwave-script";
@@ -162,99 +161,92 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     }, 3000);
   };
 
-  const executePurchase = async (service: ServiceOption, userId: string) => {
-    setError(null);
-    setStatusMessage(null);
-    setCurrentStep(0);
-
-    try {
-      const supabase = createClient();
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("balance")
-        .eq("id", userId)
-        .single();
-
-      const balance = Number(profile?.balance || 0);
-      const price = service.finalNaira;
-
-      if (balance < price) {
-        setStatusMessage(
-          `Insufficient balance. Funding ₦${price.toLocaleString()}…`
-        );
-        await initiatePayment(price, service, userId);
-        return;
+  const verifyAndCredit = (
+    reference: string,
+    amountNaira: number,
+    provider: string
+  ): Promise<void> => {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const res = await fetch("/api/payments/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reference,
+            amount: amountNaira,
+            provider,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Payment verification failed");
+        await refreshUser();
+        resolve();
+      } catch (err) {
+        reject(err);
       }
-
-      await doPurchase(service);
-    } catch (e: any) {
-      setError(e.message || "Purchase failed");
-      setCurrentStep(-1);
-    }
+    });
   };
 
-  // ---------- PAYSTACK ----------
+  // ---------- PAYSTACK (fixed – callback is NOT async) ----------
   const initiatePaystack = (
     amountNaira: number,
-    service: ServiceOption,
-    userId: string
+    onSuccess: () => void,
+    userId: string,
+    meta: Record<string, string> = {}
   ) => {
     return new Promise<void>((resolve, reject) => {
       if (!window.PaystackPop) {
         reject(
-          new Error("Paystack script not loaded. Please refresh and try again.")
+          new Error(
+            "Paystack is still loading. Please wait 2 seconds and try again."
+          )
         );
         return;
       }
 
       const publicKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY;
       if (!publicKey) {
-        reject(new Error("Paystack public key is missing."));
+        reject(
+          new Error(
+            "Paystack public key is missing. Check Vercel environment variables."
+          )
+        );
         return;
       }
+
+      const ref = `SV_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
       const handler = window.PaystackPop.setup({
         key: publicKey,
         email: user?.email || "customer@swiftverify.ng",
-        amount: Math.round(amountNaira * 100), // kobo
+        amount: Math.round(Number(amountNaira) * 100),
         currency: "NGN",
-        ref: `SV_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        ref: ref,
         metadata: {
           user_id: userId,
           purpose: "wallet_fund",
-          service_name: service.serviceName,
-          country_code: service.countryCode,
+          ...meta,
         },
-        callback: async (response: any) => {
-          try {
-            const res = await fetch("/api/payments/verify", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                reference: response.reference,
-                amount: amountNaira,
-                provider: "paystack",
-              }),
+        callback: function (response: any) {
+          verifyAndCredit(response.reference, amountNaira, "paystack")
+            .then(() => {
+              setStatusMessage("Wallet funded successfully");
+              onSuccess();
+              resolve();
+            })
+            .catch((err: any) => {
+              setError(err.message || "Verification failed");
+              setCurrentStep(-1);
+              reject(err);
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || "Payment verification failed");
-
-            await refreshUser();
-            setStatusMessage("Wallet funded. Placing order…");
-            await doPurchase(service);
-            resolve();
-          } catch (err: any) {
-            setError(err.message);
-            setCurrentStep(-1);
-            reject(err);
-          }
         },
-        onClose: () => {
+        onClose: function () {
           setStatusMessage("Payment cancelled");
           setCurrentStep(-1);
           resolve();
         },
       });
+
       handler.openIframe();
     });
   };
@@ -262,14 +254,14 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
   // ---------- FLUTTERWAVE ----------
   const initiateFlutterwave = (
     amountNaira: number,
-    service: ServiceOption,
+    onSuccess: () => void,
     userId: string
   ) => {
     return new Promise<void>((resolve, reject) => {
       if (!window.FlutterwaveCheckout) {
         reject(
           new Error(
-            "Flutterwave script not loaded. Please refresh and try again."
+            "Flutterwave is still loading. Please wait 2 seconds and try again."
           )
         );
         return;
@@ -295,47 +287,36 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
         },
         customizations: {
           title: "Swift Verify",
-          description: `Fund wallet for ${service.serviceName}`,
+          description: "Fund wallet",
         },
         meta: {
           user_id: userId,
           purpose: "wallet_fund",
         },
-        callback: async (response: any) => {
-          try {
-            if (
-              response.status !== "successful" &&
-              response.status !== "completed"
-            ) {
-              setStatusMessage("Payment was not successful");
-              setCurrentStep(-1);
-              resolve();
-              return;
-            }
-
-            const res = await fetch("/api/payments/verify", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                reference: response.tx_ref || txRef,
-                amount: amountNaira,
-                provider: "flutterwave",
-              }),
-            });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || "Payment verification failed");
-
-            await refreshUser();
-            setStatusMessage("Wallet funded. Placing order…");
-            await doPurchase(service);
-            resolve();
-          } catch (err: any) {
-            setError(err.message);
+        callback: function (response: any) {
+          if (
+            response.status !== "successful" &&
+            response.status !== "completed"
+          ) {
+            setStatusMessage("Payment was not successful");
             setCurrentStep(-1);
-            reject(err);
+            resolve();
+            return;
           }
+
+          verifyAndCredit(response.tx_ref || txRef, amountNaira, "flutterwave")
+            .then(() => {
+              setStatusMessage("Wallet funded successfully");
+              onSuccess();
+              resolve();
+            })
+            .catch((err: any) => {
+              setError(err.message || "Verification failed");
+              setCurrentStep(-1);
+              reject(err);
+            });
         },
-        onclose: () => {
+        onclose: function () {
           setStatusMessage("Payment cancelled");
           setCurrentStep(-1);
           resolve();
@@ -344,17 +325,16 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     });
   };
 
-  // Choose which gateway to use
   const initiatePayment = (
     amountNaira: number,
-    service: ServiceOption,
-    userId: string
+    onSuccess: () => void,
+    userId: string,
+    meta: Record<string, string> = {}
   ) => {
     if (paymentProvider === "flutterwave") {
-      return initiateFlutterwave(amountNaira, service, userId);
+      return initiateFlutterwave(amountNaira, onSuccess, userId);
     }
-    // Default: Paystack
-    return initiatePaystack(amountNaira, service, userId);
+    return initiatePaystack(amountNaira, onSuccess, userId, meta);
   };
 
   const doPurchase = async (service: ServiceOption) => {
@@ -395,6 +375,77 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     startPolling(data.orderId);
   };
 
+  const executePurchase = async (service: ServiceOption, userId: string) => {
+    setError(null);
+    setStatusMessage(null);
+    setCurrentStep(0);
+
+    try {
+      const supabase = createClient();
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("balance")
+        .eq("id", userId)
+        .single();
+
+      const balance = Number(profile?.balance || 0);
+      const price = service.finalNaira;
+
+      if (balance < price) {
+        setStatusMessage(
+          `Insufficient balance. Funding ₦${price.toLocaleString()}…`
+        );
+        await initiatePayment(
+          price,
+          async () => {
+            setStatusMessage("Wallet funded. Placing order…");
+            await doPurchase(service);
+          },
+          userId,
+          {
+            service_name: service.serviceName,
+            country_code: service.countryCode,
+          }
+        );
+        return;
+      }
+
+      await doPurchase(service);
+    } catch (e: any) {
+      setError(e.message || "Purchase failed");
+      setCurrentStep(-1);
+    }
+  };
+
+  // FUND WALLET
+  const handleFund = async (amount?: number) => {
+    setError(null);
+    setStatusMessage(null);
+
+    if (!user) {
+      setPendingFundAmount(amount || 1000);
+      setAuthOpen(true);
+      return;
+    }
+
+    const toFund = Math.max(amount || 1000, 100);
+
+    setStatusMessage(`Funding wallet with ₦${toFund.toLocaleString()}…`);
+    try {
+      await initiatePayment(
+        toFund,
+        () => {
+          setStatusMessage("Wallet funded successfully!");
+          setCurrentStep(-1);
+        },
+        user.id
+      );
+    } catch (e: any) {
+      setError(e.message || "Funding failed");
+      setCurrentStep(-1);
+    }
+  };
+
   const handleBuy = async (service: ServiceOption) => {
     setPendingService(service);
     setError(null);
@@ -430,6 +481,9 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     if (pendingService) {
       await executePurchase(pendingService, authUser.id);
       setPendingService(null);
+    } else if (pendingFundAmount) {
+      await handleFund(pendingFundAmount);
+      setPendingFundAmount(null);
     }
   };
 
@@ -441,6 +495,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     <>
       {children({
         onBuy: handleBuy,
+        onFund: handleFund,
         user,
         refreshUser,
         currentStep,
@@ -453,6 +508,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
         onClose={() => {
           setAuthOpen(false);
           setPendingService(null);
+          setPendingFundAmount(null);
         }}
         onSuccess={handleAuthSuccess}
         title="Quick Signup to Buy"
