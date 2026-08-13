@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 interface WalletCardProps {
   username?: string;
   balance?: number;
@@ -13,13 +15,35 @@ export default function WalletCard({
   onFund,
   announcement,
 }: WalletCardProps) {
-  const handleClick = () => {
+  const [showInput, setShowInput] = useState(false);
+  const [amount, setAmount] = useState("500");
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFundClick = () => {
     if (!onFund) {
-      alert("Funding is not available right now. Please try BUY NUMBER instead.");
+      alert("Funding is not available right now.");
       return;
     }
-    // Minimum ₦500
-    onFund(500);
+    setShowInput(true);
+    setError(null);
+  };
+
+  const handleConfirm = () => {
+    const value = Number(amount);
+
+    if (!value || isNaN(value)) {
+      setError("Please enter a valid amount");
+      return;
+    }
+
+    if (value < 500) {
+      setError("Minimum amount is ₦500");
+      return;
+    }
+
+    setError(null);
+    setShowInput(false);
+    onFund?.(value);
   };
 
   return (
@@ -34,15 +58,47 @@ export default function WalletCard({
             ₦{Number(balance).toLocaleString("en-NG", { minimumFractionDigits: 2 })}
           </span>
         </div>
-        <button
-          onClick={handleClick}
-          className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-2.5 rounded-md text-sm transition-colors"
-        >
-          FUND WALLET
-        </button>
-        <p className="text-xs text-gray-400 mt-2 text-center">
-          Minimum ₦500
-        </p>
+
+        {!showInput ? (
+          <button
+            onClick={handleFundClick}
+            className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-2.5 rounded-md text-sm transition-colors"
+          >
+            FUND WALLET
+          </button>
+        ) : (
+          <div className="space-y-2">
+            <label className="block text-xs text-gray-500">
+              Enter amount (minimum ₦500)
+            </label>
+            <input
+              type="number"
+              min={500}
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+              placeholder="500"
+            />
+            {error && <p className="text-xs text-red-600">{error}</p>}
+            <div className="flex gap-2">
+              <button
+                onClick={handleConfirm}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white font-semibold py-2 rounded-md text-sm"
+              >
+                Continue
+              </button>
+              <button
+                onClick={() => {
+                  setShowInput(false);
+                  setError(null);
+                }}
+                className="px-3 border border-gray-300 rounded-md text-sm text-gray-600 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {announcement && (
