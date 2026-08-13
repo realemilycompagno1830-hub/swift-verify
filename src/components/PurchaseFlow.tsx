@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { ServiceOption } from "./OrderWidget";
 import AuthModal from "./AuthModal";
@@ -36,6 +37,7 @@ interface PurchaseFlowProps {
 }
 
 export default function PurchaseFlow({ children }: PurchaseFlowProps) {
+  const router = useRouter();
   const [user, setUser] = useState<{
     id: string;
     email: string;
@@ -187,6 +189,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     });
   };
 
+  // ---------- PAYSTACK (fixed callback) ----------
   const initiatePaystack = (
     amountNaira: number,
     onSuccess: () => void,
@@ -196,20 +199,14 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     return new Promise<void>((resolve, reject) => {
       if (!window.PaystackPop) {
         reject(
-          new Error(
-            "Paystack is still loading. Please wait 2 seconds and try again."
-          )
+          new Error("Paystack is still loading. Please wait 2 seconds and try again.")
         );
         return;
       }
 
       const publicKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY;
       if (!publicKey) {
-        reject(
-          new Error(
-            "Paystack public key is missing. Check Vercel environment variables."
-          )
-        );
+        reject(new Error("Paystack public key is missing. Check Vercel environment variables."));
         return;
       }
 
@@ -227,6 +224,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
           ...meta,
         },
         callback: function (response: any) {
+          // IMPORTANT: Do NOT make this function async
           verifyAndCredit(response.reference, amountNaira, "paystack")
             .then(() => {
               setStatusMessage("Wallet funded successfully");
@@ -250,6 +248,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     });
   };
 
+  // ---------- FLUTTERWAVE ----------
   const initiateFlutterwave = (
     amountNaira: number,
     onSuccess: () => void,
@@ -258,9 +257,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     return new Promise<void>((resolve, reject) => {
       if (!window.FlutterwaveCheckout) {
         reject(
-          new Error(
-            "Flutterwave is still loading. Please wait 2 seconds and try again."
-          )
+          new Error("Flutterwave is still loading. Please wait 2 seconds and try again.")
         );
         return;
       }
@@ -348,6 +345,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     if (lower.includes("insufficient")) {
       return "Insufficient balance. Please fund your wallet first.";
     }
+    // Strip HTML tags if present
     const stripped = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
     if (stripped.length > 180) return stripped.slice(0, 180) + "…";
     return stripped || "Purchase failed. Please try again.";
@@ -369,9 +367,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
 
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(
-        cleanError(data.error || data.details || "Failed to place order")
-      );
+      throw new Error(cleanError(data.error || data.details || "Failed to place order"));
     }
 
     setActiveOrder({
@@ -428,6 +424,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     }
   };
 
+  // FUND WALLET only (no purchase)
   const handleFund = async (amount?: number) => {
     setError(null);
     setStatusMessage(null);
@@ -438,7 +435,10 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
       return;
     }
 
-    const toFund = Math.max(amount || 1000, 100);
+    const fundAmount = amount || 1000; // default ₦1000 if none given
+    // For simplicity we open payment for a reasonable amount.
+    // You can later add a small modal to let user type any amount.
+    const toFund = Math.max(fundAmount, 100);
 
     setStatusMessage(`Funding wallet with ₦${toFund.toLocaleString()}…`);
     try {
@@ -494,6 +494,9 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     } else if (pendingFundAmount) {
       await handleFund(pendingFundAmount);
       setPendingFundAmount(null);
+    } else {
+      // Normal login/signup → go to the real user dashboard
+      router.push("/dashboard");
     }
   };
 
