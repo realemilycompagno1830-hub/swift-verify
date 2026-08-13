@@ -3,7 +3,7 @@
 interface WalletCardProps {
   username?: string;
   balance?: number;
-  onFund?: () => void;
+  onFund?: (amount?: number) => void;
   announcement?: string;
 }
 
@@ -11,8 +11,17 @@ export default function WalletCard({
   username = "guest",
   balance = 0,
   onFund,
-  announcement = "NOTICE: New US WhatsApp numbers added. High success rates!",
+  announcement,
 }: WalletCardProps) {
+  const handleClick = () => {
+    if (!onFund) {
+      alert("Funding is not available right now. Please try BUY NUMBER instead.");
+      return;
+    }
+    // Minimum ₦500
+    onFund(500);
+  };
+
   return (
     <div className="space-y-4">
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 w-full max-w-xs">
@@ -22,15 +31,18 @@ export default function WalletCard({
         <div className="text-sm text-gray-600 mb-4">
           Balance:{" "}
           <span className="font-bold text-green-700 text-base">
-            ₦{balance.toLocaleString("en-NG", { minimumFractionDigits: 2 })}
+            ₦{Number(balance).toLocaleString("en-NG", { minimumFractionDigits: 2 })}
           </span>
         </div>
         <button
-          onClick={onFund}
+          onClick={handleClick}
           className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-2.5 rounded-md text-sm transition-colors"
         >
           FUND WALLET
         </button>
+        <p className="text-xs text-gray-400 mt-2 text-center">
+          Minimum ₦500
+        </p>
       </div>
 
       {announcement && (
