@@ -187,7 +187,6 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     });
   };
 
-  // ---------- PAYSTACK (fixed – callback is NOT async) ----------
   const initiatePaystack = (
     amountNaira: number,
     onSuccess: () => void,
@@ -251,7 +250,6 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     });
   };
 
-  // ---------- FLUTTERWAVE ----------
   const initiateFlutterwave = (
     amountNaira: number,
     onSuccess: () => void,
@@ -337,6 +335,24 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     return initiatePaystack(amountNaira, onSuccess, userId, meta);
   };
 
+  const cleanError = (raw: string) => {
+    const lower = (raw || "").toLowerCase();
+    if (
+      lower.includes("out_of_stock") ||
+      lower.includes("no numbers") ||
+      lower.includes("out of stock") ||
+      lower.includes("try again later")
+    ) {
+      return "No numbers available for this service/country right now. Please try another country or try again later.";
+    }
+    if (lower.includes("insufficient")) {
+      return "Insufficient balance. Please fund your wallet first.";
+    }
+    const stripped = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    if (stripped.length > 180) return stripped.slice(0, 180) + "…";
+    return stripped || "Purchase failed. Please try again.";
+  };
+
   const doPurchase = async (service: ServiceOption) => {
     setCurrentStep(0);
     const res = await fetch("/api/purchase", {
@@ -352,7 +368,11 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     });
 
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to place order");
+    if (!res.ok) {
+      throw new Error(
+        cleanError(data.error || data.details || "Failed to place order")
+      );
+    }
 
     setActiveOrder({
       id: data.orderId,
@@ -391,22 +411,13 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
       const balance = Number(profile?.balance || 0);
       const price = service.finalNaira;
 
+      // Do NOT auto-open Paystack.
+      // User must fund wallet first via FUND WALLET button.
       if (balance < price) {
-        setStatusMessage(
-          `Insufficient balance. Funding ₦${price.toLocaleString()}…`
+        setError(
+          `Insufficient balance. You have ₦${balance.toLocaleString()} but this number costs ₦${price.toLocaleString()}. Please fund your wallet first (minimum ₦500).`
         );
-        await initiatePayment(
-          price,
-          async () => {
-            setStatusMessage("Wallet funded. Placing order…");
-            await doPurchase(service);
-          },
-          userId,
-          {
-            service_name: service.serviceName,
-            country_code: service.countryCode,
-          }
-        );
+        setCurrentStep(-1);
         return;
       }
 
@@ -417,7 +428,6 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
     }
   };
 
-  // FUND WALLET
   const handleFund = async (amount?: number) => {
     setError(null);
     setStatusMessage(null);
