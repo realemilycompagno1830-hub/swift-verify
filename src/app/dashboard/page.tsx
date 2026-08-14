@@ -46,6 +46,19 @@ export default function UserDashboardPage() {
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [logoText, setLogoText] = useState("SWIFTVERIFY");
   const [logoUrl, setLogoUrl] = useState("");
+  const [footerData, setFooterData] = useState<{
+    company: { label: string; url: string }[];
+    services: { label: string; url: string }[];
+    support: { label: string; url: string }[];
+    copyright: string;
+    payment_gateways: string[];
+  }>({
+    company: [],
+    services: [],
+    support: [],
+    copyright: "© 2026 SWIFTVERIFY. All Rights Reserved.",
+    payment_gateways: [],
+  });
   const [menuItems, setMenuItems] = useState([
     { label: "Home", url: "/" },
     { label: "SMS Verification", url: "/" },
@@ -73,7 +86,7 @@ export default function UserDashboardPage() {
     setBalance(Number(profile?.balance || 0));
     setRole(profile?.role || "user");
 
-    const [{ data: ordersData }, { data: txData }, { data: menus }, { data: brandRow }] =
+    const [{ data: ordersData }, { data: txData }, { data: menus }, { data: brandRow }, { data: footerRow }] =
       await Promise.all([
         supabase
           .from("orders")
@@ -102,12 +115,30 @@ export default function UserDashboardPage() {
           .select("value")
           .eq("key", "brand")
           .single(),
+        supabase
+          .from("site_settings")
+          .select("value")
+          .eq("key", "footer")
+          .single(),
       ]);
 
     if (brandRow?.value) {
       const b = brandRow.value as any;
       if (b.logo_text) setLogoText(b.logo_text);
       if (b.logo_url) setLogoUrl(b.logo_url);
+    }
+
+    if (footerRow?.value) {
+      const f = footerRow.value as any;
+      setFooterData({
+        company: Array.isArray(f.company) ? f.company : [],
+        services: Array.isArray(f.services) ? f.services : [],
+        support: Array.isArray(f.support) ? f.support : [],
+        copyright: f.copyright || "© 2026 SWIFTVERIFY. All Rights Reserved.",
+        payment_gateways: Array.isArray(f.payment_gateways)
+          ? f.payment_gateways
+          : [],
+      });
     }
 
     setOrders(ordersData || []);
@@ -536,7 +567,13 @@ export default function UserDashboardPage() {
             )}
           </main>
 
-          <Footer paymentGateways={[]} companyLinks={[]} servicesLinks={[]} supportLinks={[]} copyright="© 2026 SWIFTVERIFY.NG. All Rights Reserved." />
+          <Footer
+            companyLinks={footerData.company}
+            servicesLinks={footerData.services}
+            supportLinks={footerData.support}
+            copyright={footerData.copyright}
+            paymentGateways={footerData.payment_gateways}
+          />
         </div>
       )}
     </PurchaseFlow>
