@@ -380,8 +380,8 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
           {!checkingStock && availableCountries.length > 0 && (
             <p className="text-xs text-green-700 mt-1">
               {availableCountries.length} countr
-              {availableCountries.length === 1 ? "y" : "ies"} with stock for
-              this service
+              {availableCountries.length === 1 ? "y" : "ies"} with stock
+              (only higher success rates shown)
             </p>
           )}
         </div>
