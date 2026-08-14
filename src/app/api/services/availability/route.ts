@@ -108,6 +108,13 @@ export async function GET(req: NextRequest) {
         };
       })
       .filter(Boolean)
+      // Only show countries with decent success rate (configurable)
+      .filter((c: any) => {
+        const minRate = Number(process.env.MIN_SUCCESS_RATE || 50);
+        // If SMSPool sent no rate (0), keep it only if we still have a price
+        if (!c.successRate || c.successRate <= 0) return c.finalNaira > 0;
+        return c.successRate >= minRate;
+      })
       // Prefer higher success rate, then lower price
       .sort((a: any, b: any) => {
         if (b.successRate !== a.successRate) return b.successRate - a.successRate;
