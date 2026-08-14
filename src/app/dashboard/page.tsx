@@ -44,6 +44,8 @@ export default function UserDashboardPage() {
   const [tab, setTab] = useState<"orders" | "transactions">("orders");
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [logoText, setLogoText] = useState("SWIFTVERIFY");
+  const [logoUrl, setLogoUrl] = useState("");
   const [menuItems, setMenuItems] = useState([
     { label: "Home", url: "/" },
     { label: "SMS Verification", url: "/" },
@@ -71,7 +73,7 @@ export default function UserDashboardPage() {
     setBalance(Number(profile?.balance || 0));
     setRole(profile?.role || "user");
 
-    const [{ data: ordersData }, { data: txData }, { data: menus }] =
+    const [{ data: ordersData }, { data: txData }, { data: menus }, { data: brandRow }] =
       await Promise.all([
         supabase
           .from("orders")
@@ -95,7 +97,18 @@ export default function UserDashboardPage() {
           .eq("location", "header")
           .eq("is_active", true)
           .order("sort_order"),
+        supabase
+          .from("site_settings")
+          .select("value")
+          .eq("key", "brand")
+          .single(),
       ]);
+
+    if (brandRow?.value) {
+      const b = brandRow.value as any;
+      if (b.logo_text) setLogoText(b.logo_text);
+      if (b.logo_url) setLogoUrl(b.logo_url);
+    }
 
     setOrders(ordersData || []);
     setTransactions(txData || []);
@@ -222,7 +235,8 @@ export default function UserDashboardPage() {
       {({ onBuy, onFund, user, openAuth, refreshUser }) => (
         <div className="min-h-screen flex flex-col bg-gray-50">
           <Header
-            logoText="SWIFTVERIFY.NG"
+            logoText={logoText || "SWIFTVERIFY"}
+            logoUrl={logoUrl || undefined}
             menuItems={menuItems}
             isLoggedIn={!!user}
             username={user?.username || username}
