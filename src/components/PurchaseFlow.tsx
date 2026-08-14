@@ -411,7 +411,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
       // User must fund wallet first via FUND WALLET button.
       if (balance < price) {
         setError(
-          `Insufficient balance. You have ₦${balance.toLocaleString()} but this number costs ₦${price.toLocaleString()}. Please fund your wallet first (minimum ₦500).`
+          `Insufficient balance. You have ₦${balance.toLocaleString()} but this number costs ₦${price.toLocaleString()}. Please fund your wallet first (minimum ₦1,000).`
         );
         setCurrentStep(-1);
         return;
