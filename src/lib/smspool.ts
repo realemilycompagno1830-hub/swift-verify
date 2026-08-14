@@ -114,6 +114,17 @@ export async function getActiveOrders() {
   return smspoolRequest('/request/active');
 }
 
+
+/** Success rate + price per country for a given service (indicates availability) */
+export async function getSuccessRate(service: string | number) {
+  return smspoolRequest('/request/success_rate', { service }, 'POST');
+}
+
+/** Suggested valid pools for service + country */
+export async function getValidPools(service: string | number, country: string | number) {
+  return smspoolRequest('/pool/retrieve_valid', { service, country, web: 1 }, 'POST');
+}
+
 /**
  * Helper: Apply Naira pricing with global margin + overrides
  * baseUsd comes from SMSPool (or cached)
