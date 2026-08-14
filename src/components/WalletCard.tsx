@@ -16,7 +16,7 @@ export default function WalletCard({
   announcement,
 }: WalletCardProps) {
   const [showInput, setShowInput] = useState(false);
-  const [amount, setAmount] = useState("500");
+  const [amount, setAmount] = useState("1000");
   const [error, setError] = useState<string | null>(null);
 
   const handleFundClick = () => {
@@ -36,8 +36,8 @@ export default function WalletCard({
       return;
     }
 
-    if (value < 500) {
-      setError("Minimum amount is ₦500");
+    if (value < 1000) {
+      setError("Minimum amount is ₦1,000");
       return;
     }
 
@@ -69,15 +69,15 @@ export default function WalletCard({
         ) : (
           <div className="space-y-2">
             <label className="block text-xs text-gray-500">
-              Enter amount (minimum ₦500)
+              Enter amount (minimum ₦1,000)
             </label>
             <input
               type="number"
-              min={500}
+              min={1000}
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
-              placeholder="500"
+              placeholder="1000"
             />
             {error && <p className="text-xs text-red-600">{error}</p>}
             <div className="flex gap-2">
