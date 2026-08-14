@@ -49,10 +49,10 @@ export default function Header({
               <img
                 src={logoUrl}
                 alt={logoText || "Logo"}
-                className="h-8 sm:h-9 w-auto object-contain"
+                className="h-11 sm:h-14 w-auto max-w-[220px] sm:max-w-[280px] object-contain"
               />
             ) : (
-              <span className="text-lg sm:text-xl font-bold tracking-tight">
+              <span className="text-xl sm:text-2xl font-bold tracking-tight">
                 <span className="text-red-600">{mainPart}</span>
                 <span className="text-black">{restPart}</span>
               </span>
