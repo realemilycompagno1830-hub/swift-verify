@@ -109,6 +109,12 @@ export async function cancelSMS(orderId: string) {
   return smspoolRequest('/sms/cancel', { orderid: orderId });
 }
 
+/** Request another SMS on the same number (completed orders only; not always guaranteed) */
+export async function resendSMS(orderId: string) {
+  return smspoolRequest('/sms/resend', { orderid: orderId });
+}
+
+
 /** Active orders */
 export async function getActiveOrders() {
   return smspoolRequest('/request/active');
