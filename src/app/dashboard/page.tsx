@@ -20,6 +20,7 @@ interface Order {
   cost_naira: number;
   created_at: string;
   expires_at: string | null;
+  smspool_order_id?: string | null;
 }
 
 interface Transaction {
@@ -43,6 +44,7 @@ export default function UserDashboardPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [tab, setTab] = useState<"orders" | "transactions">("orders");
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [resendingId, setResendingId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [logoText, setLogoText] = useState("SWIFTVERIFY");
   const [logoUrl, setLogoUrl] = useState("");
@@ -91,7 +93,7 @@ export default function UserDashboardPage() {
         supabase
           .from("orders")
           .select(
-            "id, service_name, country_code, phone_number, otp_code, status, cost_naira, created_at, expires_at"
+            "id, service_name, country_code, phone_number, otp_code, status, cost_naira, created_at, expires_at, smspool_order_id"
           )
           .eq("user_id", user.id)
           .order("created_at", { ascending: false })
@@ -185,6 +187,33 @@ export default function UserDashboardPage() {
       setActionMessage(e.message || "Could not cancel order");
     } finally {
       setCancellingId(null);
+    }
+  };
+
+  const resendOrder = async (orderId: string) => {
+    if (
+      !confirm(
+        "Request another SMS code on this same number?\n\nOn the app (WhatsApp, Instagram, etc.), tap Resend code first, then wait here for the new OTP.\n\nNote: Resend is not always guaranteed by the provider."
+      )
+    )
+      return;
+    setResendingId(orderId);
+    setActionMessage(null);
+    try {
+      const res = await fetch(`/api/orders/${orderId}/resend`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Resend failed");
+      setActionMessage(
+        data.message ||
+          "Requested again. Tap Resend on the app, then wait for the new code here."
+      );
+      await load();
+    } catch (e: any) {
+      setActionMessage(e.message || "Could not resend");
+    } finally {
+      setResendingId(null);
     }
   };
 
@@ -397,22 +426,38 @@ export default function UserDashboardPage() {
                         )
                       )}
 
-                      <div className="flex items-center justify-between mt-2">
+                      <div className="flex items-center justify-between mt-2 gap-2">
                         <p className="text-xs text-gray-400">
                           Cost: ₦{Number(o.cost_naira).toLocaleString()}
                         </p>
-                        {(o.status === "waiting_sms" ||
-                          o.status === "pending") && (
-                          <button
-                            onClick={() => cancelOrder(o.id)}
-                            disabled={cancellingId === o.id}
-                            className="text-xs text-red-600 border border-red-200 hover:bg-red-50 px-2.5 py-1 rounded disabled:opacity-50"
-                          >
-                            {cancellingId === o.id
-                              ? "Cancelling…"
-                              : "Cancel & Refund"}
-                          </button>
-                        )}
+                        <div className="flex flex-wrap gap-2 justify-end">
+                          {o.phone_number &&
+                            ["completed", "waiting_sms", "pending"].includes(
+                              o.status
+                            ) && (
+                              <button
+                                onClick={() => resendOrder(o.id)}
+                                disabled={resendingId === o.id}
+                                className="text-xs text-blue-700 border border-blue-200 hover:bg-blue-50 px-2.5 py-1 rounded disabled:opacity-50"
+                              >
+                                {resendingId === o.id
+                                  ? "Requesting…"
+                                  : "Request code again"}
+                              </button>
+                            )}
+                          {(o.status === "waiting_sms" ||
+                            o.status === "pending") && (
+                            <button
+                              onClick={() => cancelOrder(o.id)}
+                              disabled={cancellingId === o.id}
+                              className="text-xs text-red-600 border border-red-200 hover:bg-red-50 px-2.5 py-1 rounded disabled:opacity-50"
+                            >
+                              {cancellingId === o.id
+                                ? "Cancelling…"
+                                : "Cancel & Refund"}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -486,6 +531,20 @@ export default function UserDashboardPage() {
                               >
                                 {o.status}
                               </span>
+                              {o.phone_number &&
+                                ["completed", "waiting_sms", "pending"].includes(
+                                  o.status
+                                ) && (
+                                  <button
+                                    onClick={() => resendOrder(o.id)}
+                                    disabled={resendingId === o.id}
+                                    className="block mt-1 text-xs text-blue-700 underline disabled:opacity-50"
+                                  >
+                                    {resendingId === o.id
+                                      ? "Requesting…"
+                                      : "Request code again"}
+                                  </button>
+                                )}
                               {(o.status === "waiting_sms" ||
                                 o.status === "pending") && (
                                 <button
