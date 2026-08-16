@@ -116,6 +116,7 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
   const [error, setError] = useState<string | null>(null);
   const [buying, setBuying] = useState(false);
   const [serviceSearch, setServiceSearch] = useState("");
+  const [countrySearch, setCountrySearch] = useState("");
 
   // Load master service list once
   useEffect(() => {
@@ -159,6 +160,7 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
       setAvailableCountries([]);
       setSelectedCountry(null);
       setStockMessage(null);
+      setCountrySearch("");
       return;
     }
 
@@ -231,6 +233,16 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
     const q = serviceSearch.toLowerCase();
     return services.filter((s) => s.name.toLowerCase().includes(q));
   }, [services, serviceSearch]);
+
+  const filteredCountries = useMemo(() => {
+    if (!countrySearch.trim()) return availableCountries;
+    const q = countrySearch.toLowerCase();
+    return availableCountries.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.code.toLowerCase().includes(q)
+    );
+  }, [availableCountries, countrySearch]);
 
   const currentPrice = useMemo(() => {
     if (!selectedService || !selectedCountry) return 0;
@@ -348,6 +360,14 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
               </span>
             )}
           </label>
+          <input
+            type="text"
+            placeholder="Search country (e.g. United States, UK, Nigeria...)"
+            value={countrySearch}
+            onChange={(e) => setCountrySearch(e.target.value)}
+            disabled={!selectedService || checkingStock || noStock}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-50"
+          />
           <select
             className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 bg-white disabled:bg-gray-50"
             value={selectedCountry?.code || ""}
@@ -366,9 +386,11 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
                 ? "Checking available countries…"
                 : noStock
                 ? "No countries in stock"
+                : filteredCountries.length === 0
+                ? "No country matches your search"
                 : "-- Choose a country --"}
             </option>
-            {availableCountries.map((c) => (
+            {filteredCountries.map((c) => (
               <option key={c.code} value={c.code}>
                 {FLAG_MAP[c.code] || "🏳️"} {c.name}
                 {typeof c.successRate === "number" && c.successRate > 0
