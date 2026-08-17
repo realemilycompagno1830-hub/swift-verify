@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 
 export interface ServiceOption {
   serviceId: string;
@@ -67,6 +67,7 @@ const FLAG_MAP: Record<string, string> = {
   CH: "🇨🇭",
   BE: "🇧🇪",
   GR: "🇬🇷",
+  BD: "🇧🇩",
 };
 
 function estimateBaseUsd(serviceName: string): number {
@@ -110,13 +111,34 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
   const [selectedCountry, setSelectedCountry] = useState<CountryItem | null>(
     null
   );
+  const [serviceQuery, setServiceQuery] = useState("");
+  const [countryQuery, setCountryQuery] = useState("");
+  const [serviceOpen, setServiceOpen] = useState(false);
+  const [countryOpen, setCountryOpen] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [checkingStock, setCheckingStock] = useState(false);
   const [stockMessage, setStockMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [buying, setBuying] = useState(false);
-  const [serviceSearch, setServiceSearch] = useState("");
-  const [countrySearch, setCountrySearch] = useState("");
+
+  const serviceWrapRef = useRef<HTMLDivElement>(null);
+  const countryWrapRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      const t = e.target as Node;
+      if (serviceWrapRef.current && !serviceWrapRef.current.contains(t)) {
+        setServiceOpen(false);
+      }
+      if (countryWrapRef.current && !countryWrapRef.current.contains(t)) {
+        setCountryOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
 
   // Load master service list once
   useEffect(() => {
@@ -136,11 +158,6 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
         setOverrides(data.overrides || {});
         setGlobalMarkup(data.globalMarkup || 150);
         setUsdNgnRate(data.usdNgnRate || 1600);
-
-        const wa = (data.services || []).find((s: ServiceItem) =>
-          s.name.toLowerCase().includes("whatsapp")
-        );
-        if (wa) setSelectedService(wa);
       } catch (e: any) {
         if (!cancelled) setError(e.message || "Could not load services");
       } finally {
@@ -154,13 +171,13 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
     };
   }, []);
 
-  // When service changes → load countries that have stock/pricing for it
+  // When service changes → load countries with stock
   useEffect(() => {
     if (!selectedService) {
       setAvailableCountries([]);
       setSelectedCountry(null);
+      setCountryQuery("");
       setStockMessage(null);
-      setCountrySearch("");
       return;
     }
 
@@ -170,6 +187,7 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
       setCheckingStock(true);
       setStockMessage(null);
       setSelectedCountry(null);
+      setCountryQuery("");
 
       try {
         const q = encodeURIComponent(
@@ -206,9 +224,6 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
         } else {
           setAvailableCountries(list);
           setStockMessage(null);
-          // Prefer US if available, else first
-          const us = list.find((c) => c.code === "US");
-          setSelectedCountry(us || list[0]);
         }
       } catch {
         if (!cancelled) {
@@ -229,20 +244,21 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
   }, [selectedService, allCountries]);
 
   const filteredServices = useMemo(() => {
-    if (!serviceSearch.trim()) return services;
-    const q = serviceSearch.toLowerCase();
-    return services.filter((s) => s.name.toLowerCase().includes(q));
-  }, [services, serviceSearch]);
+    const q = serviceQuery.trim().toLowerCase();
+    if (!q) return services.slice(0, 40);
+    return services
+      .filter((s) => s.name.toLowerCase().includes(q))
+      .slice(0, 40);
+  }, [services, serviceQuery]);
 
   const filteredCountries = useMemo(() => {
-    if (!countrySearch.trim()) return availableCountries;
-    const q = countrySearch.toLowerCase();
+    const q = countryQuery.trim().toLowerCase();
+    if (!q) return availableCountries;
     return availableCountries.filter(
       (c) =>
-        c.name.toLowerCase().includes(q) ||
-        c.code.toLowerCase().includes(q)
+        c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q)
     );
-  }, [availableCountries, countrySearch]);
+  }, [availableCountries, countryQuery]);
 
   const currentPrice = useMemo(() => {
     if (!selectedService || !selectedCountry) return 0;
@@ -263,6 +279,24 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
     globalMarkup,
     usdNgnRate,
   ]);
+
+  const pickService = (s: ServiceItem) => {
+    setSelectedService(s);
+    setServiceQuery(s.name);
+    setServiceOpen(false);
+  };
+
+  const pickCountry = (c: CountryItem) => {
+    setSelectedCountry(c);
+    setCountryQuery(
+      `${FLAG_MAP[c.code] || "🏳️"} ${c.name}${
+        typeof c.successRate === "number" && c.successRate > 0
+          ? ` (${c.successRate}%)`
+          : ""
+      }`
+    );
+    setCountryOpen(false);
+  };
 
   const handleBuy = async () => {
     if (!selectedService || !selectedCountry || disabled || buying) return;
@@ -318,42 +352,59 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
   return (
     <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 sm:p-6 max-w-2xl w-full">
       <div className="space-y-4 mb-5">
-        {/* Service */}
-        <div>
+        {/* SERVICE — one searchable box */}
+        <div ref={serviceWrapRef} className="relative">
           <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Select Service
+            Service
           </label>
           <input
             type="text"
-            placeholder="Search service (e.g. Facebook, Instagram...)"
-            value={serviceSearch}
-            onChange={(e) => setServiceSearch(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-red-500"
-          />
-          <select
-            className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 bg-white"
-            value={selectedService?.id || ""}
+            placeholder="Type to search (WhatsApp, Facebook, Instagram…)"
+            value={serviceQuery}
             onChange={(e) => {
-              const svc = services.find((s) => s.id === e.target.value);
-              setSelectedService(svc || null);
+              setServiceQuery(e.target.value);
+              setServiceOpen(true);
+              // If they clear or edit away from selection, drop selection
+              if (
+                selectedService &&
+                e.target.value.trim().toLowerCase() !==
+                  selectedService.name.toLowerCase()
+              ) {
+                setSelectedService(null);
+              }
             }}
-          >
-            <option value="">-- Choose a service --</option>
-            {filteredServices.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
+            onFocus={() => setServiceOpen(true)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+            autoComplete="off"
+          />
+          {serviceOpen && filteredServices.length > 0 && (
+            <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+              {filteredServices.map((s) => (
+                <li key={s.id}>
+                  <button
+                    type="button"
+                    className={`w-full text-left px-3 py-2.5 text-sm hover:bg-red-50 ${
+                      selectedService?.id === s.id
+                        ? "bg-red-50 text-red-700 font-medium"
+                        : "text-gray-800"
+                    }`}
+                    onClick={() => pickService(s)}
+                  >
+                    {s.name}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           <p className="text-xs text-gray-400 mt-1">
-            {services.length} services listed
+            {services.length} services · type to filter
           </p>
         </div>
 
-        {/* Country — only those with stock for selected service */}
-        <div>
+        {/* COUNTRY — one searchable box */}
+        <div ref={countryWrapRef} className="relative">
           <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Select Country
+            Country
             {checkingStock && (
               <span className="ml-2 text-xs text-amber-600 font-normal">
                 Checking stock…
@@ -362,48 +413,76 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
           </label>
           <input
             type="text"
-            placeholder="Search country (e.g. United States, UK, Nigeria...)"
-            value={countrySearch}
-            onChange={(e) => setCountrySearch(e.target.value)}
-            disabled={!selectedService || checkingStock || noStock}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-50"
-          />
-          <select
-            className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 bg-white disabled:bg-gray-50"
-            value={selectedCountry?.code || ""}
-            disabled={!selectedService || checkingStock || noStock}
-            onChange={(e) => {
-              const c = availableCountries.find(
-                (c) => c.code === e.target.value
-              );
-              setSelectedCountry(c || null);
-            }}
-          >
-            <option value="">
-              {!selectedService
-                ? "-- Choose a service first --"
+            placeholder={
+              !selectedService
+                ? "Choose a service first"
                 : checkingStock
                 ? "Checking available countries…"
                 : noStock
                 ? "No countries in stock"
-                : filteredCountries.length === 0
-                ? "No country matches your search"
-                : "-- Choose a country --"}
-            </option>
-            {filteredCountries.map((c) => (
-              <option key={c.code} value={c.code}>
-                {FLAG_MAP[c.code] || "🏳️"} {c.name}
-                {typeof c.successRate === "number" && c.successRate > 0
-                  ? ` (${c.successRate}% success)`
-                  : ""}
-              </option>
-            ))}
-          </select>
+                : "Type to search (United States, UK, Nigeria…)"
+            }
+            value={countryQuery}
+            disabled={!selectedService || checkingStock || noStock}
+            onChange={(e) => {
+              setCountryQuery(e.target.value);
+              setCountryOpen(true);
+              if (selectedCountry) {
+                const label = selectedCountry.name.toLowerCase();
+                if (!e.target.value.trim().toLowerCase().includes(label)) {
+                  setSelectedCountry(null);
+                }
+              }
+            }}
+            onFocus={() => {
+              if (selectedService && !checkingStock && !noStock) {
+                setCountryOpen(true);
+              }
+            }}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-50 disabled:text-gray-400"
+            autoComplete="off"
+          />
+          {countryOpen &&
+            selectedService &&
+            !checkingStock &&
+            !noStock &&
+            filteredCountries.length > 0 && (
+              <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+                {filteredCountries.map((c) => (
+                  <li key={c.code}>
+                    <button
+                      type="button"
+                      className={`w-full text-left px-3 py-2.5 text-sm hover:bg-red-50 ${
+                        selectedCountry?.code === c.code
+                          ? "bg-red-50 text-red-700 font-medium"
+                          : "text-gray-800"
+                      }`}
+                      onClick={() => pickCountry(c)}
+                    >
+                      {FLAG_MAP[c.code] || "🏳️"} {c.name}
+                      {typeof c.successRate === "number" &&
+                      c.successRate > 0
+                        ? ` · ${c.successRate}% success`
+                        : ""}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          {countryOpen &&
+            selectedService &&
+            !checkingStock &&
+            !noStock &&
+            filteredCountries.length === 0 && (
+              <div className="absolute z-20 mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-500 shadow-lg">
+                No country matches your search
+              </div>
+            )}
           {!checkingStock && availableCountries.length > 0 && (
             <p className="text-xs text-green-700 mt-1">
               {availableCountries.length} countr
               {availableCountries.length === 1 ? "y" : "ies"} with stock
-              (only higher success rates shown)
+              (higher success rates only)
             </p>
           )}
         </div>
