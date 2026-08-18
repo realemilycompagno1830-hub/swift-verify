@@ -11,7 +11,7 @@ export async function GET() {
         supabase
           .from("account_products")
           .select(
-            "id, darkstore_id, name, description, category_name, image_url, stock, cost_rub, override_price_naira, is_active"
+            "id, darkstore_id, name, display_name, description, category_name, image_url, stock, cost_rub, override_price_naira, is_active"
           )
           .eq("is_active", true)
           .gt("stock", 0)
@@ -34,7 +34,7 @@ export async function GET() {
 
     const list = (products || []).map((p: any) => ({
       id: p.id,
-      name: p.name,
+      name: p.display_name || p.name,
       description: p.description,
       category: p.category_name || "Other",
       imageUrl: p.image_url,
