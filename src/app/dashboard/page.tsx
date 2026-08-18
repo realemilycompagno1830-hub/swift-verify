@@ -57,6 +57,7 @@ export default function UserDashboardPage() {
   const [tab, setTab] = useState<"orders" | "accounts" | "transactions">("orders");
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [resendingId, setResendingId] = useState<string | null>(null);
+  const [refreshingAccId, setRefreshingAccId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [logoText, setLogoText] = useState("SWIFTVERIFY");
   const [logoUrl, setLogoUrl] = useState("");
@@ -235,6 +236,25 @@ export default function UserDashboardPage() {
       setActionMessage(e.message || "Could not resend");
     } finally {
       setResendingId(null);
+    }
+  };
+
+  const refreshAccountDelivery = async (orderId: string) => {
+    setRefreshingAccId(orderId);
+    setActionMessage(null);
+    try {
+      const res = await fetch(`/api/accounts/orders/${orderId}/refresh`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not fetch delivery");
+      setActionMessage("Delivery loaded. Scroll to Accounts tab.");
+      await load();
+      setTab("accounts");
+    } catch (e: any) {
+      setActionMessage(e.message || "Fetch delivery failed");
+    } finally {
+      setRefreshingAccId(null);
     }
   };
 
@@ -667,9 +687,21 @@ export default function UserDashboardPage() {
                           </a>
                         )}
                         {!a.delivery_text && !a.delivery_link && (
-                          <p className="text-xs text-amber-600">
-                            Delivery pending or was only available at purchase time.
-                          </p>
+                          <div className="space-y-1">
+                            <p className="text-xs text-amber-600">
+                              Delivery not loaded yet.
+                            </p>
+                            <button
+                              type="button"
+                              disabled={refreshingAccId === a.id}
+                              onClick={() => refreshAccountDelivery(a.id)}
+                              className="text-xs bg-red-600 text-white px-3 py-1.5 rounded-md font-semibold disabled:opacity-50"
+                            >
+                              {refreshingAccId === a.id
+                                ? "Fetching…"
+                                : "Fetch delivery from supplier"}
+                            </button>
+                          </div>
                         )}
                       </div>
                     ))}
