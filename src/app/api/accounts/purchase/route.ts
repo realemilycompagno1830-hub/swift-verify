@@ -3,44 +3,39 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import {
   calcNairaFromRub,
   createOrder,
-  orderDownload,
-  orderStatus,
+  softOrderDownload,
+  softOrderStatus,
 } from "@/lib/darkstore";
 
 async function tryFetchDelivery(orderId: string | number) {
   let deliveryLink: string | null = null;
   let deliveryText: string | null = null;
 
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
-    try {
-      const st = await orderStatus(orderId);
-      const stData = st?.data || st;
-      const stName = String(stData?.status || "").toLowerCase();
-      if (stName === "canceled" || stName === "error" || stName === "refund") {
-        return { deliveryLink, deliveryText, status: stName };
-      }
-    } catch {
-      /* continue */
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 2000));
+
+    const st = await softOrderStatus(orderId);
+    const stData = st.json?.data || st.json;
+    const stName = String(stData?.status || "").toLowerCase();
+    if (["canceled", "cancelled", "error", "refund"].includes(stName)) {
+      return { deliveryLink, deliveryText, status: stName };
     }
-    try {
-      const dl = await orderDownload(orderId);
-      const dlData = dl?.data || dl;
-      if (dlData?.link) {
-        deliveryLink = String(dlData.link);
-        try {
-          const fileRes = await fetch(deliveryLink, { cache: "no-store" });
-          if (fileRes.ok) {
-            const text = (await fileRes.text()).trim();
-            if (text && text.length < 80000) deliveryText = text;
-          }
-        } catch {
-          /* link only */
+
+    const dl = await softOrderDownload(orderId);
+    const dlData = dl.json?.data || dl.json;
+    const link = dlData?.link || dl.json?.link;
+    if (link) {
+      deliveryLink = String(link);
+      try {
+        const fileRes = await fetch(deliveryLink, { cache: "no-store" });
+        if (fileRes.ok) {
+          const text = (await fileRes.text()).trim();
+          if (text && text.length < 80000) deliveryText = text;
         }
-        if (deliveryLink) return { deliveryLink, deliveryText, status: "completed" };
+      } catch {
+        /* keep link */
       }
-    } catch {
-      /* retry */
+      return { deliveryLink, deliveryText, status: "completed" };
     }
   }
   return { deliveryLink, deliveryText, status: "pending" };
@@ -191,8 +186,17 @@ export async function POST(req: NextRequest) {
     }
 
     const data = dsResult?.data || dsResult;
-    const orderId = data?.id != null ? String(data.id) : null;
-    let deliveryLink = data?.link ? String(data.link) : null;
+    const orderIdRaw =
+      data?.id ??
+      data?.order_id ??
+      data?.orderId ??
+      dsResult?.id ??
+      dsResult?.order_id;
+    const orderId = orderIdRaw != null ? String(orderIdRaw) : null;
+    let deliveryLink =
+      data?.link || data?.download_link || dsResult?.link
+        ? String(data?.link || data?.download_link || dsResult?.link)
+        : null;
     let deliveryText: string | null = null;
     let finalStatus = "pending";
 
