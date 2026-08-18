@@ -225,6 +225,16 @@ export default function MenuBuilderPage() {
               <label className="flex items-center gap-1.5 text-xs text-gray-500">
                 <input
                   type="checkbox"
+                  checked={item.is_active !== false}
+                  onChange={(e) =>
+                    updateItem(item.id, { is_active: e.target.checked })
+                  }
+                />
+                Visible
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                <input
+                  type="checkbox"
                   checked={item.is_external}
                   onChange={(e) =>
                     updateItem(item.id, { is_external: e.target.checked })
