@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import OrderWidget from "@/components/OrderWidget";
 import WalletCard from "@/components/WalletCard";
@@ -47,7 +47,6 @@ interface Transaction {
 
 export default function UserDashboardPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [booting, setBooting] = useState(true);
   const [username, setUsername] = useState("");
   const [balance, setBalance] = useState(0);
@@ -238,6 +237,17 @@ export default function UserDashboardPage() {
       setResendingId(null);
     }
   };
+
+  useEffect(() => {
+    try {
+      const tabParam = new URLSearchParams(window.location.search).get("tab");
+      if (tabParam === "accounts" || tabParam === "transactions" || tabParam === "orders") {
+        setTab(tabParam);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     load();
