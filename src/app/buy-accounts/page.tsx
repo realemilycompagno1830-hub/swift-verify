@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import ConfirmModal from "@/components/ConfirmModal";
 import { createClient } from "@/lib/supabase/client";
 
 type Item = {
@@ -17,6 +19,7 @@ type Item = {
 };
 
 export default function BuyAccountsPage() {
+  const router = useRouter();
   const [title, setTitle] = useState("Buy Social Media Accounts");
   const [subtitle, setSubtitle] = useState("");
   const [groups, setGroups] = useState<{ category: string; items: Item[] }[]>(
@@ -25,14 +28,13 @@ export default function BuyAccountsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [buyingId, setBuyingId] = useState<string | null>(null);
+  const [pendingItem, setPendingItem] = useState<Item | null>(null);
   const [delivery, setDelivery] = useState<{
     text?: string | null;
     link?: string | null;
     message?: string;
   } | null>(null);
   const [user, setUser] = useState<{ id: string } | null>(null);
-  const [logoText, setLogoText] = useState("SWIFTVERIFY");
-  const [logoUrl, setLogoUrl] = useState("");
 
   useEffect(() => {
     const supabase = createClient();
@@ -65,18 +67,18 @@ export default function BuyAccountsPage() {
     };
   }, []);
 
-  const buy = async (item: Item) => {
+  const askBuy = (item: Item) => {
     if (!user) {
-      alert("Please log in from the Dashboard first, then return here to buy.");
-      window.location.href = "/dashboard";
+      setError("Please log in first, then return here to buy.");
       return;
     }
-    if (
-      !confirm(
-        `Buy "${item.name}" for ₦${item.priceNaira.toLocaleString()}?\n\nAmount will be deducted from your wallet.`
-      )
-    )
-      return;
+    setPendingItem(item);
+  };
+
+  const doBuy = async () => {
+    const item = pendingItem;
+    setPendingItem(null);
+    if (!item) return;
 
     setBuyingId(item.id);
     setDelivery(null);
@@ -89,11 +91,15 @@ export default function BuyAccountsPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Purchase failed");
+
       setDelivery({
         text: data.deliveryText,
         link: data.deliveryLink,
         message: data.message,
       });
+
+      // After short view of delivery, offer dashboard
+      window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -104,17 +110,16 @@ export default function BuyAccountsPage() {
   const copyText = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      alert("Copied!");
+      setError(null);
     } catch {
-      alert("Could not copy — select the text manually.");
+      setError("Could not copy — select the text manually.");
     }
   };
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
       <Header
-        logoText={logoText}
-        logoUrl={logoUrl || undefined}
+        logoText="SWIFTVERIFY"
         isLoggedIn={!!user}
         menuItems={[
           { label: "SMS Verification", url: "/" },
@@ -132,6 +137,13 @@ export default function BuyAccountsPage() {
         {error && (
           <div className="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
             {error}
+            {!user && (
+              <div className="mt-2">
+                <Link href="/dashboard" className="underline font-medium">
+                  Go to login / dashboard
+                </Link>
+              </div>
+            )}
           </div>
         )}
 
@@ -147,7 +159,7 @@ export default function BuyAccountsPage() {
                   <button
                     type="button"
                     onClick={() => copyText(delivery.text!)}
-                    className="text-xs text-red-600 font-semibold underline"
+                    className="text-xs bg-red-600 text-white px-3 py-1 rounded-md font-semibold"
                   >
                     Copy
                   </button>
@@ -162,11 +174,18 @@ export default function BuyAccountsPage() {
                 href={delivery.link}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-block text-sm text-red-600 font-semibold underline"
+                className="inline-block text-sm bg-white border border-green-300 text-green-800 font-semibold px-3 py-2 rounded-lg"
               >
                 Open download link
               </a>
             )}
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard?tab=accounts")}
+              className="w-full sm:w-auto bg-red-600 text-white text-sm font-semibold px-4 py-2.5 rounded-lg"
+            >
+              View in my purchase history
+            </button>
           </div>
         )}
 
@@ -193,7 +212,9 @@ export default function BuyAccountsPage() {
                         <p className="font-medium text-gray-900">{item.name}</p>
                         {item.description && (
                           <p className="text-xs text-gray-500 mt-1 line-clamp-2">
-                            {item.description.replace(/<[^>]+>/g, " ").slice(0, 160)}
+                            {item.description
+                              .replace(/<[^>]+>/g, " ")
+                              .slice(0, 160)}
                           </p>
                         )}
                         <p className="text-xs text-gray-400 mt-1">
@@ -207,7 +228,7 @@ export default function BuyAccountsPage() {
                         <button
                           type="button"
                           disabled={buyingId === item.id}
-                          onClick={() => buy(item)}
+                          onClick={() => askBuy(item)}
                           className="bg-red-600 hover:bg-red-700 disabled:bg-red-300 text-white text-sm font-semibold px-4 py-2 rounded-lg"
                         >
                           {buyingId === item.id ? "Buying…" : "Buy"}
@@ -235,6 +256,20 @@ export default function BuyAccountsPage() {
         servicesLinks={[]}
         supportLinks={[]}
         copyright="© 2026 SWIFTVERIFY. All Rights Reserved."
+      />
+
+      <ConfirmModal
+        open={!!pendingItem}
+        title="Confirm purchase"
+        message={
+          pendingItem
+            ? `Buy "${pendingItem.name}" for ₦${pendingItem.priceNaira.toLocaleString()}?\n\nThis amount will be deducted from your wallet.`
+            : ""
+        }
+        confirmLabel="Buy now"
+        cancelLabel="Cancel"
+        onConfirm={doBuy}
+        onCancel={() => setPendingItem(null)}
       />
     </div>
   );
