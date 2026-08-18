@@ -58,6 +58,9 @@ export async function POST(req: NextRequest) {
 
     const patch: any = { updated_at: new Date().toISOString() };
     if (typeof body.is_active === "boolean") patch.is_active = body.is_active;
+    if (typeof body.display_name === "string") {
+      patch.display_name = body.display_name.trim() || null;
+    }
     if (body.override_price_naira !== undefined) {
       const v = body.override_price_naira;
       patch.override_price_naira =
