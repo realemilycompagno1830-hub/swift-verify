@@ -31,6 +31,8 @@ export default function AdminAccountsPage() {
   const [onlyPreferred, setOnlyPreferred] = useState(true);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [manualId, setManualId] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
 
   const load = async () => {
@@ -93,6 +95,32 @@ export default function AdminAccountsPage() {
       setMsg(e.message);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const addById = async () => {
+    const id = manualId.trim();
+    if (!id) {
+      setMsg("Paste the DarkStore product ID first");
+      return;
+    }
+    setAdding(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/admin/accounts/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ darkstoreId: Number(id) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Add failed");
+      setMsg(data.message || "Product added");
+      setManualId("");
+      await load();
+    } catch (e: any) {
+      setMsg(e.message);
+    } finally {
+      setAdding(false);
     }
   };
 
@@ -215,6 +243,32 @@ export default function AdminAccountsPage() {
         >
           Save pricing
         </button>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+        <h2 className="font-semibold text-sm">Add one product manually</h2>
+        <p className="text-xs text-gray-500">
+          On DarkStore, open the product page. The ID is in the URL or on the
+          page (e.g. ID товара: 131458). Paste that number here.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <input
+            type="text"
+            inputMode="numeric"
+            className="border rounded-lg px-3 py-2 text-sm w-40"
+            placeholder="e.g. 131458"
+            value={manualId}
+            onChange={(e) => setManualId(e.target.value)}
+          />
+          <button
+            type="button"
+            onClick={addById}
+            disabled={adding}
+            className="bg-gray-900 hover:bg-black disabled:bg-gray-400 text-white text-sm font-semibold px-4 py-2 rounded-lg"
+          >
+            {adding ? "Adding…" : "Add from DarkStore"}
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2 items-center">
