@@ -103,6 +103,36 @@ export async function orderDownload(orderId: string | number) {
   return darkGet("/order/download", { id: orderId });
 }
 
+/** Same as darkGet but does not throw — used for polling delivery */
+export async function softOrderDownload(orderId: string | number) {
+  assertKey();
+  const url = new URL(`${BASE}/order/download`);
+  url.searchParams.set("key", API_KEY!);
+  url.searchParams.set("id", String(orderId));
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+  const json = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, json };
+}
+
+export async function softOrderStatus(orderId: string | number) {
+  assertKey();
+  const url = new URL(`${BASE}/order/status`);
+  url.searchParams.set("key", API_KEY!);
+  url.searchParams.set("id", String(orderId));
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+  const json = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, json };
+}
+
+
 /** Prefer FB / IG / TikTok in name or category for v1 sorting */
 export function isPreferredSocial(name: string, categoryName?: string): boolean {
   const t = `${name} ${categoryName || ""}`.toLowerCase();
