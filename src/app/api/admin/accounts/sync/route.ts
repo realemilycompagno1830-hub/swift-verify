@@ -36,11 +36,11 @@ export async function POST() {
 
     const all: any[] = [];
     // Pull a few pages of in-stock products
-    for (let page = 1; page <= 5; page++) {
+    for (let page = 1; page <= 12; page++) {
       const res = await listProducts({
         only_in_stock: true,
         page,
-        perPage: 50,
+        perPage: 100,
       });
       const batch = extractProductList(res);
       if (!batch.length) break;
