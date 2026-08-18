@@ -13,6 +13,7 @@ type Product = {
   id: string;
   darkstore_id: number;
   name: string;
+  display_name: string | null;
   category_name: string | null;
   stock: number;
   cost_rub: number;
@@ -269,10 +270,26 @@ export default function AdminAccountsPage() {
                     </td>
                     <td className="px-3 py-2">
                       <div className="font-medium text-gray-900 max-w-xs truncate">
-                        {p.name}
+                        {p.display_name || p.name}
                       </div>
-                      <div className="text-xs text-gray-400">
-                        {p.category_name}
+                      <input
+                        className="mt-1 w-full max-w-xs border rounded px-2 py-1 text-xs"
+                        placeholder="Custom name on site (optional)"
+                        defaultValue={p.display_name || ""}
+                        onBlur={async (e) => {
+                          const v = e.target.value.trim();
+                          await fetch("/api/admin/accounts/update", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              id: p.id,
+                              display_name: v,
+                            }),
+                          });
+                        }}
+                      />
+                      <div className="text-xs text-gray-400 mt-0.5">
+                        {p.category_name} · API: {p.name.slice(0, 40)}
                       </div>
                     </td>
                     <td className="px-3 py-2">{p.stock}</td>
