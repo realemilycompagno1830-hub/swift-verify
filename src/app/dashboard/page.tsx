@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Header from "@/components/Header";
 import OrderWidget from "@/components/OrderWidget";
 import WalletCard from "@/components/WalletCard";
@@ -23,6 +23,17 @@ interface Order {
   smspool_order_id?: string | null;
 }
 
+interface AccountOrder {
+  id: string;
+  product_name: string;
+  quantity: number;
+  cost_naira: number;
+  status: string;
+  delivery_text: string | null;
+  delivery_link: string | null;
+  created_at: string;
+}
+
 interface Transaction {
   id: string;
   type: string;
@@ -36,13 +47,15 @@ interface Transaction {
 
 export default function UserDashboardPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [booting, setBooting] = useState(true);
   const [username, setUsername] = useState("");
   const [balance, setBalance] = useState(0);
   const [role, setRole] = useState("user");
   const [orders, setOrders] = useState<Order[]>([]);
+  const [accountOrders, setAccountOrders] = useState<AccountOrder[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [tab, setTab] = useState<"orders" | "transactions">("orders");
+  const [tab, setTab] = useState<"orders" | "accounts" | "transactions">("orders");
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [resendingId, setResendingId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -88,7 +101,7 @@ export default function UserDashboardPage() {
     setBalance(Number(profile?.balance || 0));
     setRole(profile?.role || "user");
 
-    const [{ data: ordersData }, { data: txData }, { data: menus }, { data: brandRow }, { data: footerRow }] =
+    const [{ data: ordersData }, { data: txData }, { data: accData }, { data: menus }, { data: brandRow }, { data: footerRow }] =
       await Promise.all([
         supabase
           .from("orders")
@@ -102,6 +115,14 @@ export default function UserDashboardPage() {
           .from("transactions")
           .select(
             "id, type, amount, balance_after, description, reference, gateway, created_at"
+          )
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(50),
+        supabase
+          .from("account_orders")
+          .select(
+            "id, product_name, quantity, cost_naira, status, delivery_text, delivery_link, created_at"
           )
           .eq("user_id", user.id)
           .order("created_at", { ascending: false })
@@ -144,6 +165,7 @@ export default function UserDashboardPage() {
     }
 
     setOrders(ordersData || []);
+    setAccountOrders(accData || []);
     setTransactions(txData || []);
 
     if (menus && menus.length > 0) {
@@ -475,7 +497,17 @@ export default function UserDashboardPage() {
                     : "border-transparent text-gray-500 hover:text-gray-700"
                 }`}
               >
-                All Orders ({orders.length})
+                SMS Orders ({orders.length})
+              </button>
+              <button
+                onClick={() => setTab("accounts")}
+                className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
+                  tab === "accounts"
+                    ? "border-red-600 text-red-600"
+                    : "border-transparent text-gray-500"
+                }`}
+              >
+                Accounts ({accountOrders.length})
               </button>
               <button
                 onClick={() => setTab("transactions")}
@@ -568,6 +600,69 @@ export default function UserDashboardPage() {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            
+            {tab === "accounts" && (
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                {accountOrders.length === 0 ? (
+                  <p className="p-6 text-sm text-gray-500 text-center">
+                    No account purchases yet.{" "}
+                    <a href="/buy-accounts" className="text-red-600 underline">
+                      Buy accounts
+                    </a>
+                  </p>
+                ) : (
+                  <div className="divide-y divide-gray-100">
+                    {accountOrders.map((a) => (
+                      <div key={a.id} className="p-4 space-y-2">
+                        <div className="flex justify-between gap-2">
+                          <p className="font-medium text-sm text-gray-900">
+                            {a.product_name}
+                          </p>
+                          <span className="text-xs text-gray-500 shrink-0">
+                            ₦{Number(a.cost_naira).toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-400">
+                          {a.status} · {new Date(a.created_at).toLocaleString()}
+                        </p>
+                        {a.delivery_text && (
+                          <div>
+                            <button
+                              type="button"
+                              className="text-xs text-red-600 font-semibold underline mb-1"
+                              onClick={() =>
+                                navigator.clipboard.writeText(a.delivery_text || "")
+                              }
+                            >
+                              Copy credentials
+                            </button>
+                            <pre className="text-xs bg-gray-50 border rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all">
+                              {a.delivery_text}
+                            </pre>
+                          </div>
+                        )}
+                        {a.delivery_link && (
+                          <a
+                            href={a.delivery_link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-block text-xs text-red-600 font-semibold underline"
+                          >
+                            Open download link
+                          </a>
+                        )}
+                        {!a.delivery_text && !a.delivery_link && (
+                          <p className="text-xs text-amber-600">
+                            Delivery pending or was only available at purchase time.
+                          </p>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
