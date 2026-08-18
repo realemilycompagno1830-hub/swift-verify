@@ -7,6 +7,45 @@ import {
   orderStatus,
 } from "@/lib/darkstore";
 
+async function tryFetchDelivery(orderId: string | number) {
+  let deliveryLink: string | null = null;
+  let deliveryText: string | null = null;
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const st = await orderStatus(orderId);
+      const stData = st?.data || st;
+      const stName = String(stData?.status || "").toLowerCase();
+      if (stName === "canceled" || stName === "error" || stName === "refund") {
+        return { deliveryLink, deliveryText, status: stName };
+      }
+    } catch {
+      /* continue */
+    }
+    try {
+      const dl = await orderDownload(orderId);
+      const dlData = dl?.data || dl;
+      if (dlData?.link) {
+        deliveryLink = String(dlData.link);
+        try {
+          const fileRes = await fetch(deliveryLink, { cache: "no-store" });
+          if (fileRes.ok) {
+            const text = (await fileRes.text()).trim();
+            if (text && text.length < 80000) deliveryText = text;
+          }
+        } catch {
+          /* link only */
+        }
+        if (deliveryLink) return { deliveryLink, deliveryText, status: "completed" };
+      }
+    } catch {
+      /* retry */
+    }
+  }
+  return { deliveryLink, deliveryText, status: "pending" };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -27,14 +66,14 @@ export async function POST(req: NextRequest) {
 
     const admin = createAdminClient();
 
-    const { data: product } = await admin
+    const { data: product, error: prodErr } = await admin
       .from("account_products")
       .select("*")
       .eq("id", productId)
       .eq("is_active", true)
       .single();
 
-    if (!product) {
+    if (prodErr || !product) {
       return NextResponse.json({ error: "Product not available" }, { status: 404 });
     }
     if (Number(product.stock) < quantity) {
@@ -59,6 +98,7 @@ export async function POST(req: NextRequest) {
       product.override_price_naira
     );
     const total = unitPrice * quantity;
+    const displayName = product.display_name || product.name;
 
     const { data: profile } = await admin
       .from("profiles")
@@ -70,7 +110,7 @@ export async function POST(req: NextRequest) {
     if (balance < total) {
       return NextResponse.json(
         {
-          error: `Insufficient balance. You need ₦${total.toLocaleString()}. Please fund your wallet.`,
+          error: `Insufficient balance. You need ₦${total.toLocaleString()}. Please fund your wallet first.`,
           need: total,
           balance,
         },
@@ -79,17 +119,20 @@ export async function POST(req: NextRequest) {
     }
 
     const newBalance = Math.round((balance - total) * 100) / 100;
-    await admin
+    const { error: balErr } = await admin
       .from("profiles")
       .update({ balance: newBalance, updated_at: new Date().toISOString() })
       .eq("id", user.id);
+    if (balErr) {
+      return NextResponse.json({ error: "Could not update wallet" }, { status: 500 });
+    }
 
     await admin.from("transactions").insert({
       user_id: user.id,
       type: "purchase",
       amount: -total,
       balance_after: newBalance,
-      description: `Account: ${product.name} x${quantity}`,
+      description: `Account: ${displayName} x${quantity}`,
       reference: `acc_${product.darkstore_id}_${Date.now()}`,
     });
 
@@ -110,9 +153,10 @@ export async function POST(req: NextRequest) {
         type: "refund",
         amount: total,
         balance_after: restored,
-        description: `Refund account order: ${reason}`,
+        description: `Refund account: ${reason}`.slice(0, 200),
         reference: `acc_refund_${Date.now()}`,
       });
+      return restored;
     };
 
     let dsResult: any;
@@ -129,14 +173,13 @@ export async function POST(req: NextRequest) {
         user_id: user.id,
         product_id: product.id,
         darkstore_product_id: product.darkstore_id,
-        product_name: product.name,
+        product_name: displayName,
         quantity,
         cost_naira: total,
         status: "refunded",
-        error_message: msg,
+        error_message: msg.slice(0, 500),
       });
-      const stockish =
-        /stock|наличии|available/i.test(msg);
+      const stockish = /stock|наличии|available/i.test(msg);
       return NextResponse.json(
         {
           error: stockish
@@ -148,78 +191,78 @@ export async function POST(req: NextRequest) {
     }
 
     const data = dsResult?.data || dsResult;
-    const orderId = data?.id;
-    let deliveryLink = data?.link || null;
+    const orderId = data?.id != null ? String(data.id) : null;
+    let deliveryLink = data?.link ? String(data.link) : null;
     let deliveryText: string | null = null;
-    let status =
-      data?.status === "ok" || data?.status === "completed"
-        ? "completed"
-        : "pending";
+    let finalStatus = "pending";
+
+    if (data?.status === "ok" || data?.status === "completed") {
+      finalStatus = "completed";
+    }
 
     if (orderId) {
-      try {
-        if (data?.status === "pending") {
-          await new Promise((r) => setTimeout(r, 2000));
-          const st = await orderStatus(orderId);
-          const stData = st?.data || st;
-          if (stData?.status === "completed" || stData?.status === "ok") {
-            status = "completed";
-          }
-        }
-        const dl = await orderDownload(orderId);
-        const dlData = dl?.data || dl;
-        if (dlData?.link) deliveryLink = dlData.link;
-
-        if (deliveryLink) {
-          try {
-            const fileRes = await fetch(deliveryLink, { cache: "no-store" });
-            if (fileRes.ok) {
-              const text = await fileRes.text();
-              if (text && text.length < 50000) deliveryText = text.trim();
-            }
-          } catch {
-            /* link only */
-          }
-        }
-      } catch {
-        /* soft */
+      const got = await tryFetchDelivery(orderId);
+      if (got.deliveryLink) deliveryLink = got.deliveryLink;
+      if (got.deliveryText) deliveryText = got.deliveryText;
+      if (got.status === "completed" || deliveryLink || deliveryText) {
+        finalStatus = "completed";
+      }
+      if (["canceled", "error", "refund"].includes(got.status)) {
+        await refund(`Supplier status: ${got.status}`);
+        await admin.from("account_orders").insert({
+          user_id: user.id,
+          product_id: product.id,
+          darkstore_product_id: product.darkstore_id,
+          darkstore_order_id: orderId,
+          product_name: displayName,
+          quantity,
+          cost_naira: total,
+          status: "refunded",
+          error_message: `Supplier: ${got.status}`,
+        });
+        return NextResponse.json(
+          { error: "Supplier cancelled the order. Wallet refunded." },
+          { status: 400 }
+        );
       }
     }
 
-    if (!deliveryLink && !deliveryText && !orderId) {
-      await refund("No delivery from supplier");
-      await admin.from("account_orders").insert({
-        user_id: user.id,
-        product_id: product.id,
-        darkstore_product_id: product.darkstore_id,
-        product_name: product.name,
-        quantity,
-        cost_naira: total,
-        status: "refunded",
-        error_message: "No delivery",
-      });
-      return NextResponse.json(
-        { error: "Could not deliver account. Wallet refunded." },
-        { status: 400 }
-      );
-    }
-
-    const { data: saved } = await admin
+    // ALWAYS save order row when DarkStore accepted payment
+    const { data: saved, error: saveErr } = await admin
       .from("account_orders")
       .insert({
         user_id: user.id,
         product_id: product.id,
         darkstore_product_id: product.darkstore_id,
-        darkstore_order_id: orderId ? String(orderId) : null,
-        product_name: product.name,
+        darkstore_order_id: orderId,
+        product_name: displayName,
         quantity,
         cost_naira: total,
-        status: status === "pending" ? "pending" : "completed",
+        status: finalStatus === "pending" ? "pending" : "completed",
         delivery_text: deliveryText,
         delivery_link: deliveryLink,
       })
       .select()
       .single();
+
+    if (saveErr) {
+      console.error("account_orders insert failed", saveErr);
+      // Still return delivery if we have it — critical for user
+      return NextResponse.json({
+        success: true,
+        warning:
+          "Order placed at supplier but history save failed. Save your credentials now.",
+        deliveryText,
+        deliveryLink,
+        darkstoreOrderId: orderId,
+        balance: newBalance,
+        message: deliveryText
+          ? "Account delivered. Copy your credentials below."
+          : deliveryLink
+          ? "Use the download link below and save it."
+          : `Order #${orderId} placed. Check DarkStore if needed.`,
+      });
+    }
 
     await admin
       .from("account_products")
@@ -234,12 +277,14 @@ export async function POST(req: NextRequest) {
       order: saved,
       deliveryText,
       deliveryLink,
+      darkstoreOrderId: orderId,
       balance: newBalance,
+      redirectTo: "/dashboard?tab=accounts",
       message: deliveryText
         ? "Account delivered. Copy your credentials below."
         : deliveryLink
-        ? "Order ready. Use the download link below."
-        : "Order placed. Check your order history shortly.",
+        ? "Order ready. Open the download link and save your file."
+        : "Order placed. It will appear in your dashboard shortly.",
     });
   } catch (e: any) {
     console.error("account purchase", e);
