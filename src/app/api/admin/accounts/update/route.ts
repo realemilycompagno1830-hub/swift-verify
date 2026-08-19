@@ -66,6 +66,12 @@ export async function POST(req: NextRequest) {
       patch.override_price_naira =
         v === null || v === "" ? null : Number(v);
     }
+    if (body.sort_order !== undefined) {
+      patch.sort_order = Number(body.sort_order) || 0;
+    }
+    if (typeof body.category_name === "string" && body.category_name.trim()) {
+      patch.category_name = body.category_name.trim();
+    }
 
     const { error } = await admin
       .from("account_products")
@@ -108,6 +114,7 @@ export async function GET() {
           .select("*")
           .order("is_active", { ascending: false })
           .order("category_name")
+          .order("sort_order", { ascending: true })
           .order("name")
           .limit(500),
         admin
