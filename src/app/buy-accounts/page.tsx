@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
@@ -25,6 +25,7 @@ export default function BuyAccountsPage() {
   const [groups, setGroups] = useState<{ category: string; items: Item[] }[]>(
     []
   );
+  const [activeCat, setActiveCat] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [buyingId, setBuyingId] = useState<string | null>(null);
@@ -54,7 +55,11 @@ export default function BuyAccountsPage() {
         if (cancelled) return;
         setTitle(data.page?.title || "Buy Social Media Accounts");
         setSubtitle(data.page?.subtitle || "");
-        setGroups(data.groups || []);
+        const g = data.groups || [];
+        setGroups(g);
+        if (g.length && !activeCat) {
+          setActiveCat(g[0].category);
+        }
       } catch (e: any) {
         if (!cancelled) setError(e.message);
       } finally {
@@ -65,7 +70,14 @@ export default function BuyAccountsPage() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const currentItems = useMemo(() => {
+    if (!groups.length) return [];
+    const g = groups.find((x) => x.category === activeCat) || groups[0];
+    return g?.items || [];
+  }, [groups, activeCat]);
 
   const askBuy = (item: Item) => {
     if (!user) {
@@ -97,8 +109,6 @@ export default function BuyAccountsPage() {
         link: data.deliveryLink,
         message: data.message,
       });
-
-      // After short view of delivery, offer dashboard
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e: any) {
       setError(e.message);
@@ -131,7 +141,7 @@ export default function BuyAccountsPage() {
       <main className="flex-1 max-w-4xl mx-auto w-full px-4 py-8">
         <h1 className="text-2xl font-bold text-gray-900">{title}</h1>
         {subtitle && (
-          <p className="text-sm text-gray-600 mt-1 mb-6">{subtitle}</p>
+          <p className="text-sm text-gray-600 mt-1 mb-4">{subtitle}</p>
         )}
 
         {error && (
@@ -196,50 +206,80 @@ export default function BuyAccountsPage() {
             No accounts listed yet. Admin needs to sync and activate products.
           </div>
         ) : (
-          <div className="space-y-8">
-            {groups.map((g) => (
-              <section key={g.category}>
-                <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-                  {g.category}
-                </h2>
-                <div className="space-y-3">
-                  {g.items.map((item) => (
-                    <div
-                      key={item.id}
-                      className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3"
+          <>
+            {/* Horizontal category tabs */}
+            <div className="mb-5 -mx-1 overflow-x-auto">
+              <div className="flex gap-2 px-1 pb-1 min-w-max">
+                {groups.map((g) => {
+                  const active = (activeCat || groups[0]?.category) === g.category;
+                  return (
+                    <button
+                      key={g.category}
+                      type="button"
+                      onClick={() => setActiveCat(g.category)}
+                      className={`px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition-colors ${
+                        active
+                          ? "bg-red-600 text-white shadow-sm"
+                          : "bg-white border border-gray-200 text-gray-700 hover:bg-gray-50"
+                      }`}
                     >
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-900">{item.name}</p>
-                        {item.description && (
-                          <p className="text-xs text-gray-500 mt-1 line-clamp-2">
-                            {item.description
-                              .replace(/<[^>]+>/g, " ")
-                              .slice(0, 160)}
-                          </p>
-                        )}
-                        <p className="text-xs text-gray-400 mt-1">
-                          Stock: {item.stock}
+                      {g.category}
+                      <span
+                        className={`ml-1.5 text-xs ${
+                          active ? "text-red-100" : "text-gray-400"
+                        }`}
+                      >
+                        ({g.items.length})
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Products for selected category */}
+            <div className="space-y-3">
+              {currentItems.length === 0 ? (
+                <p className="text-sm text-gray-500 text-center py-8">
+                  No products in this category right now.
+                </p>
+              ) : (
+                currentItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-900">{item.name}</p>
+                      {item.description && (
+                        <p className="text-xs text-gray-500 mt-1 line-clamp-2">
+                          {item.description
+                            .replace(/<[^>]+>/g, " ")
+                            .slice(0, 160)}
                         </p>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        <span className="font-bold text-gray-900">
-                          ₦{item.priceNaira.toLocaleString()}
-                        </span>
-                        <button
-                          type="button"
-                          disabled={buyingId === item.id}
-                          onClick={() => askBuy(item)}
-                          className="bg-red-600 hover:bg-red-700 disabled:bg-red-300 text-white text-sm font-semibold px-4 py-2 rounded-lg"
-                        >
-                          {buyingId === item.id ? "Buying…" : "Buy"}
-                        </button>
-                      </div>
+                      )}
+                      <p className="text-xs text-gray-400 mt-1">
+                        Stock: {item.stock}
+                      </p>
                     </div>
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="font-bold text-gray-900">
+                        ₦{item.priceNaira.toLocaleString()}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={buyingId === item.id}
+                        onClick={() => askBuy(item)}
+                        className="bg-red-600 hover:bg-red-700 disabled:bg-red-300 text-white text-sm font-semibold px-4 py-2 rounded-lg"
+                      >
+                        {buyingId === item.id ? "Buying…" : "Buy"}
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
         )}
 
         <p className="text-xs text-gray-400 mt-8 text-center">
