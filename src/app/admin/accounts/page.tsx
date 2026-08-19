@@ -59,25 +59,33 @@ export default function AdminAccountsPage() {
 
   const filtered = useMemo(() => {
     let list = products;
-    if (onlyPreferred) {
+    const q = filter.trim().toLowerCase();
+
+    // If searching by exact/partial ID, don't hide by preferred filter
+    const lookingUpId = q !== "" && /^\d+$/.test(q);
+
+    if (onlyPreferred && !lookingUpId) {
       list = list.filter((p) => {
-        const t = `${p.name} ${p.category_name || ""}`.toLowerCase();
+        const text = `${p.name} ${p.category_name || ""}`.toLowerCase();
         return (
-          t.includes("facebook") ||
-          t.includes("instagram") ||
-          t.includes("tiktok") ||
-          t.includes("tik tok") ||
-          t.includes("meta")
+          text.includes("facebook") ||
+          text.includes("instagram") ||
+          text.includes("tiktok") ||
+          text.includes("tik tok") ||
+          text.includes("meta")
         );
       });
     }
-    if (filter.trim()) {
-      const q = filter.toLowerCase();
-      list = list.filter(
-        (p) =>
+    if (q) {
+      list = list.filter((p) => {
+        const idStr = String(p.darkstore_id);
+        return (
+          idStr.includes(q) ||
           p.name.toLowerCase().includes(q) ||
+          (p.display_name || "").toLowerCase().includes(q) ||
           (p.category_name || "").toLowerCase().includes(q)
-      );
+        );
+      });
     }
     return list;
   }, [products, filter, onlyPreferred]);
@@ -114,8 +122,14 @@ export default function AdminAccountsPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Add failed");
-      setMsg(data.message || "Product added");
+      const addedId = data.product?.darkstore_id || id;
+      setMsg(
+        (data.message || "Product added") +
+          ` · Search box set to ID ${addedId}. Turn ON "On site" to sell it.`
+      );
       setManualId("");
+      setOnlyPreferred(false);
+      setFilter(String(addedId));
       await load();
     } catch (e: any) {
       setMsg(e.message);
@@ -281,7 +295,7 @@ export default function AdminAccountsPage() {
         </button>
         <input
           className="border rounded-lg px-3 py-2 text-sm flex-1 min-w-[160px]"
-          placeholder="Filter name…"
+          placeholder="Search name or DarkStore ID…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
@@ -295,6 +309,11 @@ export default function AdminAccountsPage() {
         </label>
       </div>
 
+      <p className="text-xs text-gray-500">
+        Showing {filtered.length} of {products.length} products
+        {filter.trim() ? ` · filter: "${filter.trim()}"` : ""}
+      </p>
+
       {loading ? (
         <p className="text-sm text-gray-500">Loading…</p>
       ) : (
@@ -303,6 +322,7 @@ export default function AdminAccountsPage() {
             <thead className="bg-gray-50 text-left text-xs text-gray-500">
               <tr>
                 <th className="px-3 py-2">On site</th>
+                <th className="px-3 py-2">DS ID</th>
                 <th className="px-3 py-2">Product</th>
                 <th className="px-3 py-2">Stock</th>
                 <th className="px-3 py-2">Cost ₽</th>
@@ -321,6 +341,9 @@ export default function AdminAccountsPage() {
                         checked={p.is_active}
                         onChange={() => toggle(p)}
                       />
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-gray-600">
+                      {p.darkstore_id}
                     </td>
                     <td className="px-3 py-2">
                       <div className="font-medium text-gray-900 max-w-xs truncate">
@@ -363,8 +386,8 @@ export default function AdminAccountsPage() {
               })}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-8 text-center text-gray-500">
-                    No products yet. Click Sync from DarkStore.
+                  <td colSpan={7} className="px-3 py-8 text-center text-gray-500">
+                    No products match. Clear the search, or uncheck "Facebook / Instagram / TikTok only", or Sync / Add by ID.
                   </td>
                 </tr>
               )}
