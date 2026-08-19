@@ -19,6 +19,7 @@ type Product = {
   cost_rub: number;
   override_price_naira: number | null;
   is_active: boolean;
+  sort_order?: number;
 };
 
 export default function AdminAccountsPage() {
@@ -87,7 +88,12 @@ export default function AdminAccountsPage() {
         );
       });
     }
-    return list;
+    return [...list].sort(
+      (a, b) =>
+        (a.category_name || "").localeCompare(b.category_name || "") ||
+        (a.sort_order ?? 0) - (b.sort_order ?? 0) ||
+        a.name.localeCompare(b.name)
+    );
   }, [products, filter, onlyPreferred]);
 
   const sync = async () => {
@@ -190,6 +196,69 @@ export default function AdminAccountsPage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: p.id, override_price_naira: num }),
+    });
+  };
+
+  /** Move product up/down within the current filtered list (same category preferred) */
+  const moveProduct = async (p: Product, direction: "up" | "down") => {
+    const cat = p.category_name || "Other";
+    const same = products
+      .filter((x) => (x.category_name || "Other") === cat)
+      .sort(
+        (a, b) =>
+          (a.sort_order ?? 0) - (b.sort_order ?? 0) ||
+          a.name.localeCompare(b.name)
+      );
+    const idx = same.findIndex((x) => x.id === p.id);
+    if (idx < 0) return;
+    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= same.length) return;
+
+    const a = same[idx];
+    const b = same[swapIdx];
+    const orderA = a.sort_order ?? idx;
+    const orderB = b.sort_order ?? swapIdx;
+
+    // If both have same order, assign sequential
+    let newA = orderB;
+    let newB = orderA;
+    if (orderA === orderB) {
+      newA = direction === "up" ? orderA - 1 : orderA + 1;
+      newB = orderA;
+    }
+
+    setProducts((prev) =>
+      prev.map((x) => {
+        if (x.id === a.id) return { ...x, sort_order: newA };
+        if (x.id === b.id) return { ...x, sort_order: newB };
+        return x;
+      })
+    );
+
+    await Promise.all([
+      fetch("/api/admin/accounts/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: a.id, sort_order: newA }),
+      }),
+      fetch("/api/admin/accounts/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: b.id, sort_order: newB }),
+      }),
+    ]);
+  };
+
+  const setSortOrder = async (p: Product, value: string) => {
+    const num = Number(value);
+    if (Number.isNaN(num)) return;
+    setProducts((prev) =>
+      prev.map((x) => (x.id === p.id ? { ...x, sort_order: num } : x))
+    );
+    await fetch("/api/admin/accounts/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: p.id, sort_order: num }),
     });
   };
 
@@ -322,6 +391,7 @@ export default function AdminAccountsPage() {
             <thead className="bg-gray-50 text-left text-xs text-gray-500">
               <tr>
                 <th className="px-3 py-2">On site</th>
+                <th className="px-3 py-2">Order</th>
                 <th className="px-3 py-2">DS ID</th>
                 <th className="px-3 py-2">Product</th>
                 <th className="px-3 py-2">Stock</th>
@@ -341,6 +411,41 @@ export default function AdminAccountsPage() {
                         checked={p.is_active}
                         onChange={() => toggle(p)}
                       />
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-col items-center gap-0.5">
+                        <button
+                          type="button"
+                          title="Move up"
+                          onClick={() => moveProduct(p, "up")}
+                          className="text-xs text-gray-500 hover:text-red-600 leading-none px-1"
+                        >
+                          ▲
+                        </button>
+                        <input
+                          type="number"
+                          className="border rounded w-12 text-center text-xs py-0.5"
+                          value={p.sort_order ?? 0}
+                          onChange={(e) =>
+                            setProducts((prev) =>
+                              prev.map((x) =>
+                                x.id === p.id
+                                  ? { ...x, sort_order: Number(e.target.value) }
+                                  : x
+                              )
+                            )
+                          }
+                          onBlur={(e) => setSortOrder(p, e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          title="Move down"
+                          onClick={() => moveProduct(p, "down")}
+                          className="text-xs text-gray-500 hover:text-red-600 leading-none px-1"
+                        >
+                          ▼
+                        </button>
+                      </div>
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-gray-600">
                       {p.darkstore_id}
@@ -386,7 +491,7 @@ export default function AdminAccountsPage() {
               })}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-gray-500">
+                  <td colSpan={8} className="px-3 py-8 text-center text-gray-500">
                     No products match. Clear the search, or uncheck "Facebook / Instagram / TikTok only", or Sync / Add by ID.
                   </td>
                 </tr>
