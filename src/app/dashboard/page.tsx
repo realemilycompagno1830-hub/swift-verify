@@ -269,7 +269,22 @@ export default function UserDashboardPage() {
     }
   }, []);
 
+  
+  // Auto-refund any SMS orders stuck past 15 minutes
   useEffect(() => {
+    fetch("/api/orders/expire-pending", { method: "POST" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.refundedCount > 0) {
+          // refresh balances/orders
+          load();
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+useEffect(() => {
     load();
 
     const interval = setInterval(async () => {
