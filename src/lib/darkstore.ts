@@ -28,9 +28,17 @@ async function darkGet(path: string, params: Record<string, string | number | bo
     cache: "no-store",
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok || json?.success === false) {
+  // Only fail on HTTP error or explicit success:false with a real error message
+  if (!res.ok) {
     const msg = json?.message || json?.name || res.statusText || "Request failed";
-    throw new Error(`DarkStore ${res.status || 400}: ${msg}`);
+    throw new Error(msg);
+  }
+  if (json?.success === false) {
+    const msg = String(json?.message || json?.name || "Supplier rejected the request");
+    // Ignore empty/OK false-positives
+    if (msg && msg.toUpperCase() !== "OK" && msg !== "true") {
+      throw new Error(msg);
+    }
   }
   return json;
 }
@@ -52,9 +60,15 @@ async function darkPost(path: string, body: Record<string, string | number | boo
     cache: "no-store",
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok || json?.success === false) {
+  if (!res.ok) {
     const msg = json?.message || json?.name || res.statusText || "Request failed";
-    throw new Error(`DarkStore ${res.status || 400}: ${msg}`);
+    throw new Error(msg);
+  }
+  if (json?.success === false) {
+    const msg = String(json?.message || json?.name || "Supplier rejected the request");
+    if (msg && msg.toUpperCase() !== "OK" && msg !== "true") {
+      throw new Error(msg);
+    }
   }
   return json;
 }
@@ -104,7 +118,7 @@ export async function createOrder(productId: number, quantity = 1, idempotenceId
         idempotence_id: idempotenceId,
       });
     } catch (e2: any) {
-      throw new Error(e2?.message || e1?.message || "DarkStore order/create failed");
+      throw new Error(e2?.message || e1?.message || "Could not place order with supplier");
     }
   }
 
@@ -115,7 +129,7 @@ export async function createOrder(productId: number, quantity = 1, idempotenceId
     const msg =
       json?.message ||
       data?.message ||
-      "DarkStore rejected the order";
+      "Supplier rejected the order";
     throw new Error(String(msg));
   }
 
@@ -124,8 +138,7 @@ export async function createOrder(productId: number, quantity = 1, idempotenceId
   const link = data?.link ?? json?.link;
   if (orderId == null && !link) {
     throw new Error(
-      "DarkStore returned no order id. Check supplier balance / stock. Response: " +
-        JSON.stringify(json).slice(0, 300)
+      "Supplier did not confirm the order. Check stock or try again."
     );
   }
 
