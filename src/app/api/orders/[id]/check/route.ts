@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { checkSMS, cancelSMS } from "@/lib/smspool";
 
-const AUTO_EXPIRE_MS = 15 * 60 * 1000; // 15 minutes
+const AUTO_EXPIRE_MS = 5 * 60 * 1000; // 5 minutes
 
 async function refundOrder(admin: any, order: any, reason: string) {
   // Prevent double refund
@@ -56,7 +56,7 @@ async function refundOrder(admin: any, order: any, reason: string) {
 
 /**
  * POST /api/orders/[id]/check
- * Poll SMSPool for OTP. Auto-refunds if cancelled/expired or past 15 minutes.
+ * Poll SMSPool for OTP. Auto-refunds if cancelled/expired or past 5 minutes.
  */
 export async function POST(
   _req: NextRequest,
@@ -94,14 +94,14 @@ export async function POST(
       });
     }
 
-    // Time-based auto-expire (15 min)
+    // Time-based auto-expire (5 min)
     const created = new Date(order.created_at).getTime();
     const age = Date.now() - created;
     if (age > AUTO_EXPIRE_MS) {
       const r = await refundOrder(
         admin,
         order,
-        `Auto-refund expired order ${order.id} – no SMS after 15 min`
+        `Auto-refund expired order ${order.id} – no SMS after 5 min`
       );
       return NextResponse.json({
         status: "expired",
