@@ -7,6 +7,14 @@ import {
   softOrderStatus,
 } from "@/lib/darkstore";
 
+/** Never expose supplier brand names to end users */
+function publicError(msg: string) {
+  return String(msg || "Order failed")
+    .replace(/dark\s*store/gi, "supplier")
+    .replace(/darkstore/gi, "supplier")
+    .replace(/smspool/gi, "provider");
+}
+
 async function tryFetchDelivery(orderId: string | number) {
   let deliveryLink: string | null = null;
   let deliveryText: string | null = null;
@@ -162,7 +170,7 @@ export async function POST(req: NextRequest) {
         `sv_${user.id}_${product.darkstore_id}_${Date.now()}`
       );
     } catch (e: any) {
-      const msg = e?.message || "Supplier order failed";
+      const msg = publicError(e?.message || "Supplier order failed");
       await refund(msg);
       await admin.from("account_orders").insert({
         user_id: user.id,
@@ -264,7 +272,7 @@ export async function POST(req: NextRequest) {
           ? "Account delivered. Copy your credentials below."
           : deliveryLink
           ? "Use the download link below and save it."
-          : `Order #${orderId} placed. Check DarkStore if needed.`,
+          : `Order #${orderId} placed. Delivery will appear in your dashboard shortly.`,
       });
     }
 
@@ -293,7 +301,7 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     console.error("account purchase", e);
     return NextResponse.json(
-      { error: e.message || "Purchase failed" },
+      { error: publicError(e.message || "Purchase failed") },
       { status: 500 }
     );
   }
