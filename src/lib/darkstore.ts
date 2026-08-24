@@ -28,9 +28,9 @@ async function darkGet(path: string, params: Record<string, string | number | bo
     cache: "no-store",
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = json?.message || json?.name || res.statusText;
-    throw new Error(`DarkStore ${res.status}: ${msg}`);
+  if (!res.ok || json?.success === false) {
+    const msg = json?.message || json?.name || res.statusText || "Request failed";
+    throw new Error(`DarkStore ${res.status || 400}: ${msg}`);
   }
   return json;
 }
@@ -52,9 +52,9 @@ async function darkPost(path: string, body: Record<string, string | number | boo
     cache: "no-store",
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = json?.message || json?.name || res.statusText;
-    throw new Error(`DarkStore ${res.status}: ${msg}`);
+  if (!res.ok || json?.success === false) {
+    const msg = json?.message || json?.name || res.statusText || "Request failed";
+    throw new Error(`DarkStore ${res.status || 400}: ${msg}`);
   }
   return json;
 }
@@ -88,11 +88,48 @@ export async function getBalance() {
 }
 
 export async function createOrder(productId: number, quantity = 1, idempotenceId?: string) {
-  return darkGet("/order/create", {
-    product: productId,
-    quantity,
-    idempotence_id: idempotenceId,
-  });
+  // DarkStore accepts GET or POST for order/create
+  let json: any;
+  try {
+    json = await darkGet("/order/create", {
+      product: productId,
+      quantity,
+      idempotence_id: idempotenceId,
+    });
+  } catch (e1: any) {
+    try {
+      json = await darkPost("/order/create", {
+        product: productId,
+        quantity,
+        idempotence_id: idempotenceId,
+      });
+    } catch (e2: any) {
+      throw new Error(e2?.message || e1?.message || "DarkStore order/create failed");
+    }
+  }
+
+  // Normalize: some responses wrap in { success, data }
+  const data = json?.data ?? json;
+  const successFlag = json?.success;
+  if (successFlag === false) {
+    const msg =
+      json?.message ||
+      data?.message ||
+      "DarkStore rejected the order";
+    throw new Error(String(msg));
+  }
+
+  // Must have an order id OR a download link, otherwise treat as failure
+  const orderId = data?.id ?? data?.order_id ?? json?.id;
+  const link = data?.link ?? json?.link;
+  if (orderId == null && !link) {
+    throw new Error(
+      "DarkStore returned no order id. Check supplier balance / stock. Response: " +
+        JSON.stringify(json).slice(0, 300)
+    );
+  }
+
+  return json;
 }
 
 export async function orderStatus(orderId: string | number) {
