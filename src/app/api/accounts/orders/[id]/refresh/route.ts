@@ -4,7 +4,7 @@ import { softOrderDownload, softOrderStatus } from "@/lib/darkstore";
 
 /**
  * POST /api/accounts/orders/[id]/refresh
- * Pull delivery again from DarkStore for a pending account order.
+ * Pull delivery again from supplier for a pending account order.
  */
 export async function POST(
   _req: NextRequest,
@@ -36,7 +36,7 @@ export async function POST(
       return NextResponse.json(
         {
           error:
-            "No DarkStore order id saved for this purchase. Contact support with the time of purchase.",
+            "Delivery is not available for this order yet. Contact support with the time of purchase.",
         },
         { status: 400 }
       );
@@ -71,7 +71,7 @@ export async function POST(
       return NextResponse.json(
         {
           error:
-            "Still no download from DarkStore. Try again in a minute, or download from your DarkStore account if you are the admin.",
+            "Delivery is still preparing. Please try again in a minute. If it keeps failing, contact support.",
           status: st.json,
         },
         { status: 404 }
