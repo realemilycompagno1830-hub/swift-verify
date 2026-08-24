@@ -2,11 +2,11 @@ import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { cancelSMS } from "@/lib/smspool";
 
-const AUTO_EXPIRE_MS = 15 * 60 * 1000;
+const AUTO_EXPIRE_MS = 5 * 60 * 1000;
 
 /**
  * POST /api/orders/expire-pending
- * Refunds the current user's waiting orders older than 15 minutes.
+ * Refunds the current user's waiting orders older than 5 minutes.
  * Dashboard calls this on load so refunds happen even if user left the page.
  */
 export async function POST() {
