@@ -29,8 +29,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // Use admin client for balance deduction (atomic-ish)
     const admin = createAdminClient();
 
+    // 1. Check & lock balance
     const { data: profile, error: profileErr } = await admin
       .from("profiles")
       .select("balance")
@@ -49,6 +51,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 2. Deduct balance
     const newBalance = balance - priceNaira;
     const { error: updateErr } = await admin
       .from("profiles")
@@ -62,6 +65,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 3. Log transaction
     await admin.from("transactions").insert({
       user_id: user.id,
       type: "purchase",
@@ -71,6 +75,7 @@ export async function POST(req: NextRequest) {
       metadata: { serviceName, countryCode, priceNaira },
     });
 
+    // 4. Call SMSPool
     let smspoolResult: any = null;
     let phoneNumber: string | null = null;
     let smspoolOrderId: string | null = null;
@@ -84,6 +89,7 @@ export async function POST(req: NextRequest) {
           pricing_option: 1,
         });
 
+        // SMSPool response shapes vary; adjust based on real payload
         smspoolOrderId =
           smspoolResult?.order_id ||
           smspoolResult?.orderid ||
@@ -98,16 +104,19 @@ export async function POST(req: NextRequest) {
         if (smspoolOrderId) {
           status = "waiting_sms";
         } else {
+          // Unexpected response → refund
           throw new Error(
             smspoolResult?.message || "SMSPool did not return an order id"
           );
         }
       } else {
+        // Demo mode when no key
         smspoolOrderId = `DEMO_${Date.now()}`;
         phoneNumber = `+1${Math.floor(1000000000 + Math.random() * 9000000000)}`;
         status = "waiting_sms";
       }
     } catch (smsErr: any) {
+      // Refund on failure
       await admin
         .from("profiles")
         .update({ balance: balance, updated_at: new Date().toISOString() })
@@ -133,6 +142,7 @@ export async function POST(req: NextRequest) {
         friendly =
           "No numbers available for this service/country right now. Please try another country or try again later. Your balance has been refunded.";
       } else {
+        // Strip HTML
         friendly = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
         if (friendly.length > 200) friendly = friendly.slice(0, 200) + "…";
         friendly = `Number purchase failed: ${friendly}. Your balance has been refunded.`;
@@ -141,7 +151,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: friendly }, { status: 502 });
     }
 
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    // 5. Create order record
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
     const { data: order, error: orderErr } = await admin
       .from("orders")
@@ -162,6 +173,7 @@ export async function POST(req: NextRequest) {
 
     if (orderErr) {
       console.error("Order insert error", orderErr);
+      // Still return success to user if number was obtained; log for admin
     }
 
     return NextResponse.json({
