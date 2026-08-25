@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { checkSMS, cancelSMS } from "@/lib/smspool";
 
-const AUTO_EXPIRE_MS = 5 * 60 * 1000; // 5 minutes
+const AUTO_EXPIRE_MS = 10 * 60 * 1000; // 10 minutes
 
 async function refundOrder(admin: any, order: any, reason: string) {
   // Prevent double refund
