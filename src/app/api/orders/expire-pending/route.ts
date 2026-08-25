@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { cancelSMS } from "@/lib/smspool";
 
-const AUTO_EXPIRE_MS = 5 * 60 * 1000;
+const AUTO_EXPIRE_MS = 10 * 60 * 1000;
 
 /**
  * POST /api/orders/expire-pending
