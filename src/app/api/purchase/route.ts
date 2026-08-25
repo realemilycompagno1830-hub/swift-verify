@@ -152,7 +152,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 5. Create order record
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
     const { data: order, error: orderErr } = await admin
       .from("orders")
