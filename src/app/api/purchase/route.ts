@@ -7,7 +7,7 @@ import {
   normalizeFiveSimProduct,
 } from "@/lib/fivesim";
 
-const EXPIRE_MS = 10 * 60 * 1000;
+const EXPIRE_MS = 15 * 60 * 1000;
 
 export async function POST(req: NextRequest) {
   try {
