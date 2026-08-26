@@ -108,7 +108,34 @@ export async function GET() {
       }
     });
 
+    
+    // Active provider + manual services
+    let activeProvider = "smspool";
+    try {
+      const { data: prov } = await supabase
+        .from("site_settings")
+        .select("value")
+        .eq("key", "sms_provider")
+        .maybeSingle();
+      if (prov?.value?.active === "fivesim") activeProvider = "fivesim";
+    } catch {}
+
+    try {
+      const { data: manuals } = await supabase
+        .from("sms_manual_services")
+        .select("*")
+        .eq("is_active", true)
+        .eq("provider", activeProvider);
+      for (const m of manuals || []) {
+        if (!services.find((s: any) => String(s.id) === String(m.service_id) || s.name === m.service_name)) {
+          services.push({ id: String(m.service_id), name: m.service_name, manual: true });
+        }
+      }
+      services.sort((a: any, b: any) => a.name.localeCompare(b.name));
+    } catch {}
+
     return NextResponse.json({
+      provider: activeProvider,
       services,
       countries,
       overrides: overrideMap,
