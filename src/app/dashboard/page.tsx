@@ -270,7 +270,7 @@ export default function UserDashboardPage() {
   }, []);
 
   
-  // Auto-refund any SMS orders stuck past 10 minutes
+  // Auto-refund any SMS orders stuck past 15 minutes
   useEffect(() => {
     fetch("/api/orders/expire-pending", { method: "POST" })
       .then((r) => r.json())
@@ -488,7 +488,7 @@ useEffect(() => {
                         (o.status === "waiting_sms" ||
                           o.status === "pending") && (
                           <p className="text-xs text-amber-600 animate-pulse mt-2">
-                            Waiting for SMS… (auto-cancels after ~10 min)
+                            Waiting for SMS… (auto-cancels after ~15 min)
                           </p>
                         )
                       )}
