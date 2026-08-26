@@ -210,9 +210,9 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
           id: c.id,
           code: c.code,
           name: c.name,
-          finalNaira: c.finalNaira,
-          successRate: c.successRate,
-          priceUsd: c.priceUsd,
+          finalNaira: Number(c.priceNaira ?? c.finalNaira ?? 0),
+          successRate: c.successRate ?? c.success_rate,
+          priceUsd: c.priceUsd ?? c.costUsd,
         }));
 
         if (list.length === 0) {
@@ -254,10 +254,23 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
   const filteredCountries = useMemo(() => {
     const q = countryQuery.trim().toLowerCase();
     if (!q) return availableCountries;
-    return availableCountries.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q)
-    );
+    const aliases: Record<string, string[]> = {
+      us: ["usa", "united states", "america"],
+      uk: ["england", "united kingdom", "gb"],
+      gb: ["england", "united kingdom", "uk"],
+    };
+    return availableCountries.filter((c) => {
+      const name = c.name.toLowerCase();
+      const code = c.code.toLowerCase();
+      if (name.includes(q) || code.includes(q)) return true;
+      for (const [k, vals] of Object.entries(aliases)) {
+        if (q.includes(k) || vals.some((v) => q.includes(v))) {
+          if (code === k || vals.some((v) => name.includes(v) || code.includes(v.replace(/\s/g, ""))))
+            return true;
+        }
+      }
+      return false;
+    });
   }, [availableCountries, countryQuery]);
 
   const currentPrice = useMemo(() => {
