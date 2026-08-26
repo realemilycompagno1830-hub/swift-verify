@@ -12,24 +12,25 @@ interface Override {
   override_price_naira: number | null;
   custom_margin_percent: number | null;
   is_active: boolean;
+  provider?: string | null;
 }
 
 export default function PriceConfigPage() {
-  const [globalMarkup, setGlobalMarkup] = useState(150);
+  const [smspoolMarkup, setSmspoolMarkup] = useState(155);
   const [fivesimMarkup, setFivesimMarkup] = useState(100);
-  const [rubNgnRate, setRubNgnRate] = useState(1600);
-  const [overrideProvider, setOverrideProvider] = useState<'smspool' | 'fivesim'>('smspool');
+  const [fivesimUsdRate, setFivesimUsdRate] = useState(1600);
   const [overrides, setOverrides] = useState<Override[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  // New override form
   const [newService, setNewService] = useState("WhatsApp");
-  // overrideProvider state declared above
   const [newCountry, setNewCountry] = useState("US");
   const [newCountryName, setNewCountryName] = useState("United States");
   const [newPrice, setNewPrice] = useState("");
+  const [overrideProvider, setOverrideProvider] = useState<"smspool" | "fivesim">(
+    "smspool"
+  );
 
   const supabase = createClient();
 
@@ -40,22 +41,31 @@ export default function PriceConfigPage() {
   async function load() {
     setLoading(true);
     try {
-      const [{ data: marginRow }, { data: fiveRow }, { data: ovr }] = await Promise.all([
-        supabase.from("site_settings").select("value").eq("key", "global_margin").maybeSingle(),
-        supabase.from("site_settings").select("value").eq("key", "fivesim_margin").maybeSingle(),
-        supabase.from("price_overrides").select("*").order("service_name"),
-      ]);
+      const [{ data: marginRow }, { data: fiveRow }, { data: ovr }] =
+        await Promise.all([
+          supabase
+            .from("site_settings")
+            .select("value")
+            .eq("key", "global_margin")
+            .maybeSingle(),
+          supabase
+            .from("site_settings")
+            .select("value")
+            .eq("key", "fivesim_margin")
+            .maybeSingle(),
+          supabase.from("price_overrides").select("*").order("service_name"),
+        ]);
 
       if (marginRow?.value?.markup_percent != null) {
-        setGlobalMarkup(Number(marginRow.value.markup_percent));
+        setSmspoolMarkup(Number(marginRow.value.markup_percent));
       }
       if (fiveRow?.value?.markup_percent != null) {
         setFivesimMarkup(Number(fiveRow.value.markup_percent));
       }
-      if (fiveRow?.value?.usd_ngn_rate != null) {
-        setRubNgnRate(Number(fiveRow.value.usd_ngn_rate));
-      } else if (fiveRow?.value?.rub_ngn_rate != null && Number(fiveRow.value.rub_ngn_rate) > 100) {
-        setRubNgnRate(Number(fiveRow.value.rub_ngn_rate));
+      const rate =
+        fiveRow?.value?.usd_ngn_rate ?? fiveRow?.value?.rub_ngn_rate;
+      if (rate != null && Number(rate) > 100) {
+        setFivesimUsdRate(Number(rate));
       }
       setOverrides(ovr || []);
     } catch (e) {
@@ -65,17 +75,17 @@ export default function PriceConfigPage() {
     }
   }
 
-  async function saveGlobalMargin() {
+  async function saveSmspoolMargin() {
     setSaving(true);
     setMessage(null);
     try {
       const { error } = await supabase.from("site_settings").upsert({
         key: "global_margin",
-        value: { markup_percent: globalMarkup, mode: "add_to_base" },
+        value: { markup_percent: smspoolMarkup, mode: "add_to_base" },
         updated_at: new Date().toISOString(),
       });
       if (error) throw error;
-      setMessage("Global margin saved");
+      setMessage("SMSPool margin saved. Formula: USD × 1600 × (1 + markup/100)");
     } catch (e: any) {
       setMessage(e.message);
     } finally {
@@ -89,11 +99,16 @@ export default function PriceConfigPage() {
     try {
       const { error } = await supabase.from("site_settings").upsert({
         key: "fivesim_margin",
-        value: { markup_percent: fivesimMarkup, usd_ngn_rate: rubNgnRate, rub_ngn_rate: rubNgnRate },
+        value: {
+          markup_percent: fivesimMarkup,
+          usd_ngn_rate: fivesimUsdRate,
+        },
         updated_at: new Date().toISOString(),
       });
       if (error) throw error;
-      setMessage("5sim margin saved");
+      setMessage(
+        "5sim margin saved. Formula: USD × rate × (1 + markup/100)"
+      );
     } catch (e: any) {
       setMessage(e.message);
     } finally {
@@ -106,20 +121,20 @@ export default function PriceConfigPage() {
     setSaving(true);
     setMessage(null);
     try {
+      const row: any = {
+        service_name: newService.trim(),
+        country_code: newCountry.trim().toUpperCase(),
+        country_name: newCountryName.trim() || null,
+        override_price_naira: Number(newPrice),
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      };
+      // provider column may exist after SQL patch
+      row.provider = overrideProvider;
+
       const { data, error } = await supabase
         .from("price_overrides")
-        .upsert(
-          {
-            service_name: newService.trim(),
-            country_code: newCountry.trim().toUpperCase(),
-            country_name: newCountryName.trim() || null,
-            override_price_naira: Number(newPrice),
-            provider: overrideProvider,
-            is_active: true,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "service_name,country_code" }
-        )
+        .upsert(row, { onConflict: "service_name,country_code" })
         .select()
         .single();
 
@@ -131,38 +146,14 @@ export default function PriceConfigPage() {
             o.country_code === data.country_code
         );
         if (idx >= 0) {
-          const copy = [...prev];
-          copy[idx] = data;
-          return copy;
+          const next = [...prev];
+          next[idx] = data;
+          return next;
         }
-        return [...prev, data];
+        return [data, ...prev];
       });
+      setMessage(`Override saved for ${overrideProvider}`);
       setNewPrice("");
-      setMessage("Override saved");
-    } catch (e: any) {
-      setMessage(e.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function updateOverride(id: string, price: number) {
-    setSaving(true);
-    try {
-      const { error } = await supabase
-        .from("price_overrides")
-        .update({
-          override_price_naira: price,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", id);
-      if (error) throw error;
-      setOverrides((prev) =>
-        prev.map((o) =>
-          o.id === id ? { ...o, override_price_naira: price } : o
-        )
-      );
-      setMessage("Price updated");
     } catch (e: any) {
       setMessage(e.message);
     } finally {
@@ -192,6 +183,9 @@ export default function PriceConfigPage() {
     return <div className="text-gray-500">Loading price configuration…</div>;
   }
 
+  const exampleSmspool = Math.ceil(0.66 * 1600 * (1 + smspoolMarkup / 100));
+  const exampleFive = Math.ceil(0.51 * fivesimUsdRate * (1 + fivesimMarkup / 100));
+
   return (
     <div className="space-y-8 max-w-4xl">
       <div>
@@ -199,8 +193,9 @@ export default function PriceConfigPage() {
           Price Configuration & Overrides
         </h2>
         <p className="text-sm text-gray-500 mt-1">
-          SMSPool markup applies only when SMS Provider is set to SMSPool. Use the 5sim section below when using 5sim.net. Overrides force a
-          fixed ₦ price regardless of upstream changes.
+          Two separate settings: one for SMSPool, one for 5sim. The active
+          provider on <strong>SMS Provider</strong> decides which margin is
+          used on the shop.
         </p>
       </div>
 
@@ -210,43 +205,110 @@ export default function PriceConfigPage() {
         </div>
       )}
 
-      {/* Global Margin */}
-      <div className="bg-white border border-gray-200 rounded-xl p-6">
-        <h3 className="font-semibold mb-4">Global Profit Margin</h3>
+      {/* SMSPool */}
+      <div className="bg-white border-2 border-red-100 rounded-xl p-6 space-y-3">
+        <h3 className="font-semibold text-lg">1. SMSPool pricing</h3>
+        <p className="text-xs text-gray-500">
+          Used only when Active provider = <strong>SMSPool</strong>.
+          Formula: base USD × 1600 × (1 + markup% / 100)
+        </p>
         <div className="flex flex-wrap items-end gap-4">
           <div>
-            <label className="block text-sm text-gray-600 mb-1">
-              Markup %
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                value={globalMarkup}
-                onChange={(e) => setGlobalMarkup(Number(e.target.value))}
-                className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                min={0}
-                step={5}
-              />
-              <span className="text-sm text-gray-500">%</span>
-            </div>
-          </div>
-          <div className="text-sm text-gray-500 pb-2">
-            Mode: Add to Base (base USD × rate × (1 + markup%))
+            <label className="block text-sm text-gray-600 mb-1">Markup %</label>
+            <input
+              type="number"
+              value={smspoolMarkup}
+              onChange={(e) => setSmspoolMarkup(Number(e.target.value))}
+              className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              min={0}
+              step={5}
+            />
           </div>
           <button
-            onClick={saveGlobalMargin}
+            type="button"
             disabled={saving}
-            className="bg-red-600 hover:bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-50"
+            onClick={saveSmspoolMargin}
+            className="bg-red-600 text-white text-sm font-semibold px-4 py-2 rounded-lg"
           >
-            Save Margin
+            Save SMSPool margin
           </button>
         </div>
+        <p className="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2">
+          Example: $0.66 Facebook US →{" "}
+          <strong>₦{exampleSmspool.toLocaleString()}</strong> at {smspoolMarkup}%
+          markup
+        </p>
       </div>
 
-      {/* Add Override */}
-      <div className="bg-white border border-gray-200 rounded-xl p-6">
-        <h3 className="font-semibold mb-4">Add / Update Service Override</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+      {/* 5sim */}
+      <div className="bg-white border-2 border-blue-100 rounded-xl p-6 space-y-3">
+        <h3 className="font-semibold text-lg">2. 5sim.net pricing</h3>
+        <p className="text-xs text-gray-500">
+          Used only when Active provider = <strong>5sim.net</strong>.
+          5sim costs are in USD. Formula: USD × rate × (1 + markup% / 100)
+        </p>
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">Markup %</label>
+            <input
+              type="number"
+              value={fivesimMarkup}
+              onChange={(e) => setFivesimMarkup(Number(e.target.value))}
+              className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              min={0}
+              step={5}
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">
+              USD → NGN rate
+            </label>
+            <input
+              type="number"
+              value={fivesimUsdRate}
+              onChange={(e) => setFivesimUsdRate(Number(e.target.value))}
+              className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              min={100}
+              step={10}
+            />
+          </div>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={saveFivesimMargin}
+            className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg"
+          >
+            Save 5sim margin
+          </button>
+        </div>
+        <p className="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2">
+          Example: $0.51 USA Facebook on 5sim →{" "}
+          <strong>₦{exampleFive.toLocaleString()}</strong> at {fivesimMarkup}% /
+          rate {fivesimUsdRate}
+        </p>
+      </div>
+
+      {/* Overrides */}
+      <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-4">
+        <h3 className="font-semibold">3. Fixed ₦ overrides (optional)</h3>
+        <p className="text-xs text-gray-500">
+          Forces an exact Naira price for a service + country. Choose which
+          provider the rule applies to.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Provider</label>
+            <select
+              value={overrideProvider}
+              onChange={(e) =>
+                setOverrideProvider(e.target.value as "smspool" | "fivesim")
+              }
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="smspool">SMSPool</option>
+              <option value="fivesim">5sim</option>
+            </select>
+          </div>
           <div>
             <label className="block text-xs text-gray-500 mb-1">Service</label>
             <input
@@ -257,16 +319,16 @@ export default function PriceConfigPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Country Code</label>
+            <label className="block text-xs text-gray-500 mb-1">Country code</label>
             <input
               value={newCountry}
               onChange={(e) => setNewCountry(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              placeholder="US"
+              placeholder="US or USA"
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Country Name</label>
+            <label className="block text-xs text-gray-500 mb-1">Country name</label>
             <input
               value={newCountryName}
               onChange={(e) => setNewCountryName(e.target.value)}
@@ -275,7 +337,7 @@ export default function PriceConfigPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Final ₦ Price</label>
+            <label className="block text-xs text-gray-500 mb-1">Final ₦</label>
             <input
               type="number"
               value={newPrice}
@@ -284,64 +346,46 @@ export default function PriceConfigPage() {
               placeholder="800"
             />
           </div>
-          <button
-            onClick={addOverride}
-            disabled={saving || !newPrice}
-            className="bg-black hover:bg-gray-800 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-50"
-          >
-            Save Override
-          </button>
         </div>
-      </div>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={addOverride}
+          className="bg-gray-900 text-white text-sm font-semibold px-4 py-2 rounded-lg"
+        >
+          Save override
+        </button>
 
-      {/* Existing Overrides */}
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-        <div className="px-6 py-3 border-b border-gray-100 flex items-center justify-between">
-          <h3 className="font-semibold text-sm">Service & Country Overrides</h3>
-          <span className="text-xs text-gray-500">{overrides.length} rules</span>
-        </div>
-        <div className="divide-y divide-gray-100">
-          {overrides.map((o) => (
-            <div
-              key={o.id || `${o.service_name}-${o.country_code}`}
-              className="px-6 py-4 flex flex-wrap items-center gap-4"
-            >
-              <div className="flex-1 min-w-[140px]">
-                <p className="font-medium text-sm">
-                  {o.service_name}{" "}
-                  <span className="text-gray-400 font-normal">
-                    ({o.country_code})
-                  </span>
-                </p>
-                <p className="text-xs text-gray-500">{o.country_name}</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-500">₦</span>
-                <input
-                  type="number"
-                  defaultValue={o.override_price_naira ?? ""}
-                  onBlur={(e) => {
-                    const val = Number(e.target.value);
-                    if (o.id && val > 0 && val !== o.override_price_naira) {
-                      updateOverride(o.id, val);
-                    }
-                  }}
-                  className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
-                />
-              </div>
-              <button
-                onClick={() => o.id && deleteOverride(o.id)}
-                className="text-xs text-red-600 hover:underline"
-              >
-                Delete
-              </button>
-            </div>
-          ))}
+        <div className="border-t pt-4">
+          <p className="text-sm font-medium mb-2">
+            Active overrides ({overrides.length})
+          </p>
           {overrides.length === 0 && (
-            <p className="px-6 py-8 text-center text-gray-400 text-sm">
-              No overrides yet. Add one above.
-            </p>
+            <p className="text-sm text-gray-400">No overrides yet.</p>
           )}
+          <ul className="divide-y">
+            {overrides.map((o) => (
+              <li
+                key={o.id}
+                className="py-2 flex flex-wrap items-center gap-2 text-sm"
+              >
+                <span className="text-xs bg-gray-100 px-2 py-0.5 rounded">
+                  {o.provider || "smspool"}
+                </span>
+                <span className="font-medium">{o.service_name}</span>
+                <span className="text-gray-500">
+                  {o.country_code} · ₦{Number(o.override_price_naira).toLocaleString()}
+                </span>
+                <button
+                  type="button"
+                  className="ml-auto text-red-600 text-xs"
+                  onClick={() => o.id && deleteOverride(o.id)}
+                >
+                  Delete
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
     </div>
