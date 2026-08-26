@@ -4,7 +4,7 @@ import { checkSMS, cancelSMS } from "@/lib/smspool";
 import { checkOrder as fiveSimCheck, cancelOrder as fiveSimCancel } from "@/lib/fivesim";
 import { safeRefundSmsOrder } from "@/lib/wallet";
 
-const AUTO_EXPIRE_MS = 10 * 60 * 1000; // 10 minutes
+const AUTO_EXPIRE_MS = 15 * 60 * 1000; // 15 minutes
 
 export async function POST(
   _req: NextRequest,
@@ -50,7 +50,7 @@ export async function POST(
       const r = await safeRefundSmsOrder(
         admin,
         order,
-        `Auto-refund – no SMS after 10 min (${order.service_name || "order"})`,
+        `Auto-refund – no SMS after 15 min (${order.service_name || "order"})`,
         "expired"
       );
       return NextResponse.json({
