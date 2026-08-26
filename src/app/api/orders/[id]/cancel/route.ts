@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { cancelSMS } from "@/lib/smspool";
+import { cancelOrder as fiveSimCancel } from "@/lib/fivesim";
+import { safeRefundSmsOrder } from "@/lib/wallet";
 
 export async function POST(
   _req: NextRequest,
@@ -8,7 +10,6 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
-
     const supabase = await createClient();
     const {
       data: { user },
@@ -31,60 +32,38 @@ export async function POST(
       return NextResponse.json({ error: "Order not found" }, { status: 404 });
     }
 
-    if (
-      ["completed", "cancelled", "expired", "refunded"].includes(order.status)
-    ) {
+    if (["completed", "cancelled", "expired", "refunded"].includes(order.status)) {
       return NextResponse.json(
         { error: `Order is already ${order.status}` },
         { status: 400 }
       );
     }
 
-    if (order.smspool_order_id && process.env.SMSPOOL_API_KEY) {
-      try {
-        await cancelSMS(order.smspool_order_id);
-      } catch (e) {
-        console.error("SMSPool cancel failed (continuing with refund)", e);
+    try {
+      if (order.smspool_order_id) {
+        if ((order.provider || "smspool") === "fivesim") {
+          await fiveSimCancel(order.smspool_order_id);
+        } else if (process.env.SMSPOOL_API_KEY) {
+          await cancelSMS(order.smspool_order_id);
+        }
       }
+    } catch (e) {
+      console.error("Provider cancel failed (continuing refund)", e);
     }
 
-    const { data: profile } = await admin
-      .from("profiles")
-      .select("balance")
-      .eq("id", user.id)
-      .single();
-
-    const current = Number(profile?.balance || 0);
-    const refund = Number(order.cost_naira);
-    const newBalance = current + refund;
-
-    await admin
-      .from("profiles")
-      .update({ balance: newBalance, updated_at: new Date().toISOString() })
-      .eq("id", user.id);
-
-    await admin.from("transactions").insert({
-      user_id: user.id,
-      type: "refund",
-      amount: refund,
-      balance_after: newBalance,
-      description: `Cancelled order – ${order.service_name} (${order.country_code})`,
-      reference: order.id,
-    });
-
-    await admin
-      .from("orders")
-      .update({
-        status: "cancelled",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", order.id);
+    const r = await safeRefundSmsOrder(
+      admin,
+      order,
+      `Cancelled order – ${order.service_name || ""} (${order.country_code || ""})`,
+      "cancelled"
+    );
 
     return NextResponse.json({
       success: true,
       status: "cancelled",
-      refunded: refund,
-      balance: newBalance,
+      refunded: r.refunded ? r.amount : 0,
+      balance: r.balance,
+      alreadyRefunded: !r.refunded,
     });
   } catch (err: any) {
     console.error("Cancel error", err);
