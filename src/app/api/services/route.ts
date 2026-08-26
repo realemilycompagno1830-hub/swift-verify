@@ -85,19 +85,25 @@ export async function GET() {
         services = smspoolServices
           .map((s: any) => ({
             id: String(s.ID || s.id || s.name),
-            name: s.name || s.service_name || "Unknown",
+            name: String(s.name || s.service_name || "Unknown"),
           }))
-          .filter((s) => s.name && s.name !== "Unknown")
-          .sort((a, b) => a.name.localeCompare(b.name));
+          .filter((s: { id: string; name: string }) => s.name && s.name !== "Unknown")
+          .sort((a: { name: string }, b: { name: string }) =>
+            a.name.localeCompare(b.name)
+          );
 
         countries = smspoolCountries
           .map((c: any) => ({
             id: c.ID || c.id,
             code: String(c.short_name || c.ID || "").toUpperCase(),
-            name: c.name || c.country_name || String(c.ID),
+            name: String(c.name || c.country_name || String(c.ID)),
           }))
-          .filter((c) => c.code && c.name)
-          .sort((a, b) => a.name.localeCompare(b.name));
+          .filter(
+            (c: { id: any; code: string; name: string }) => c.code && c.name
+          )
+          .sort((a: { name: string }, b: { name: string }) =>
+            a.name.localeCompare(b.name)
+          );
 
         live = services.length > 0;
       } catch (err) {
