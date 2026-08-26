@@ -561,7 +561,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
                 {activeOrder.status === "waiting_sms" &&
                   !activeOrder.otp_code && (
                     <p className="text-xs text-amber-600 animate-pulse">
-                      Waiting for SMS… (auto-cancels after ~5 min)
+                      Waiting for SMS… (auto-cancels after ~10 min)
                     </p>
                   )}
                 <button
