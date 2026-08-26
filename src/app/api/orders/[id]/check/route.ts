@@ -1,63 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { checkSMS, cancelSMS } from "@/lib/smspool";
+import { checkOrder as fiveSimCheck, cancelOrder as fiveSimCancel } from "@/lib/fivesim";
+import { safeRefundSmsOrder } from "@/lib/wallet";
 
 const AUTO_EXPIRE_MS = 10 * 60 * 1000; // 10 minutes
 
-async function refundOrder(admin: any, order: any, reason: string) {
-  // Prevent double refund
-  if (["cancelled", "expired", "refunded", "completed"].includes(order.status)) {
-    return { refunded: false, balance: null };
-  }
-
-  const { data: profile } = await admin
-    .from("profiles")
-    .select("balance")
-    .eq("id", order.user_id)
-    .single();
-
-  const current = Number(profile?.balance || 0);
-  const refund = Number(order.cost_naira);
-  const newBalance = Math.round((current + refund) * 100) / 100;
-
-  await admin
-    .from("profiles")
-    .update({ balance: newBalance, updated_at: new Date().toISOString() })
-    .eq("id", order.user_id);
-
-  await admin.from("transactions").insert({
-    user_id: order.user_id,
-    type: "refund",
-    amount: refund,
-    balance_after: newBalance,
-    description: reason.slice(0, 200),
-    reference: order.id,
-  });
-
-  await admin
-    .from("orders")
-    .update({
-      status: "expired",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", order.id);
-
-  // Best-effort cancel on SMSPool
-  if (order.smspool_order_id && process.env.SMSPOOL_API_KEY) {
-    try {
-      await cancelSMS(order.smspool_order_id);
-    } catch {
-      /* ignore */
-    }
-  }
-
-  return { refunded: true, balance: newBalance, refund };
-}
-
-/**
- * POST /api/orders/[id]/check
- * Poll SMSPool for OTP. Auto-refunds if cancelled/expired or past 5 minutes.
- */
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -94,89 +42,140 @@ export async function POST(
       });
     }
 
-    // Time-based auto-expire (5 min)
     const created = new Date(order.created_at).getTime();
     const age = Date.now() - created;
     if (age > AUTO_EXPIRE_MS) {
-      const r = await refundOrder(
+      // Cancel at provider best-effort
+      await cancelProviderOrder(order);
+      const r = await safeRefundSmsOrder(
         admin,
         order,
-        `Auto-refund expired order ${order.id} – no SMS after 5 min`
+        `Auto-refund – no SMS after 10 min (${order.service_name || "order"})`,
+        "expired"
       );
       return NextResponse.json({
         status: "expired",
         refunded: r.refunded,
         balance: r.balance,
         phone_number: order.phone_number,
-        message: "No SMS received in time. Wallet refunded.",
+        message: r.refunded
+          ? "No SMS received in time. Wallet refunded."
+          : "Order already closed.",
       });
     }
 
-    if (order.smspool_order_id && process.env.SMSPOOL_API_KEY) {
+    const provider = order.provider || "smspool";
+
+    if (order.smspool_order_id) {
       try {
-        const result = await checkSMS(order.smspool_order_id);
+        if (provider === "fivesim") {
+          const result = await fiveSimCheck(order.smspool_order_id);
+          const status = String(result?.status || "").toUpperCase();
+          const smsList = Array.isArray(result?.sms) ? result.sms : [];
+          const code =
+            smsList[0]?.code ||
+            smsList[0]?.text?.match(/\d{4,8}/)?.[0] ||
+            null;
 
-        const otp =
-          result?.sms ||
-          result?.code ||
-          result?.otp ||
-          (typeof result?.message === "string" &&
-          /^\d{3,8}$/.test(result.message)
-            ? result.message
-            : null);
+          if (code) {
+            await admin
+              .from("orders")
+              .update({
+                status: "completed",
+                otp_code: String(code),
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", order.id)
+              .in("status", ["pending", "waiting_sms"]);
 
-        const statusCode = Number(result?.status);
-        const statusText = String(
-          result?.status_message || result?.full_message || result?.message || ""
-        ).toLowerCase();
+            return NextResponse.json({
+              status: "completed",
+              otp_code: String(code),
+              phone_number: order.phone_number || result?.phone,
+            });
+          }
 
-        // Success
-        if (otp && String(otp).length >= 3 && statusCode !== 0 && statusCode !== 3) {
-          await admin
-            .from("orders")
-            .update({
+          if (["CANCELED", "CANCELLED", "TIMEOUT", "BANNED", "FINISHED"].includes(status) && !code) {
+            if (status === "FINISHED" && !code) {
+              // finished without code is rare – treat as expired
+            }
+            if (["CANCELED", "CANCELLED", "TIMEOUT", "BANNED"].includes(status)) {
+              const r = await safeRefundSmsOrder(
+                admin,
+                order,
+                `Auto-refund – provider status ${status}`,
+                "expired"
+              );
+              return NextResponse.json({
+                status: "expired",
+                refunded: r.refunded,
+                balance: r.balance,
+                message: "Number cancelled by provider. Wallet refunded.",
+              });
+            }
+          }
+        } else {
+          const result = await checkSMS(order.smspool_order_id);
+          const otp =
+            result?.sms ||
+            result?.code ||
+            result?.otp ||
+            (typeof result?.message === "string" &&
+            /^\d{3,8}$/.test(result.message)
+              ? result.message
+              : null);
+
+          const statusCode = Number(result?.status);
+          const statusText = String(
+            result?.status_message || result?.full_message || result?.message || ""
+          ).toLowerCase();
+
+          if (otp && String(otp).length >= 3 && statusCode !== 0 && statusCode !== 3) {
+            await admin
+              .from("orders")
+              .update({
+                status: "completed",
+                otp_code: String(otp),
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", order.id)
+              .in("status", ["pending", "waiting_sms"]);
+
+            return NextResponse.json({
               status: "completed",
               otp_code: String(otp),
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", order.id);
+              phone_number: order.phone_number || result?.number,
+            });
+          }
+
+          const dead =
+            statusCode === 3 ||
+            statusCode === -1 ||
+            /cancel|expir|refund|timeout|not.?available|fail/.test(statusText);
+
+          if (dead) {
+            const r = await safeRefundSmsOrder(
+              admin,
+              order,
+              `Auto-refund – provider cancelled (${statusCode})`,
+              "expired"
+            );
+            return NextResponse.json({
+              status: "expired",
+              refunded: r.refunded,
+              balance: r.balance,
+              message: "Number cancelled by provider. Wallet refunded.",
+            });
+          }
 
           return NextResponse.json({
-            status: "completed",
-            otp_code: String(otp),
+            status: "waiting_sms",
             phone_number: order.phone_number || result?.number,
+            time_left: result?.time_left,
           });
         }
-
-        // SMSPool cancelled / expired / refunded styles
-        // Common: status 3 = cancelled, or message contains cancel/expire/refund
-        const dead =
-          statusCode === 3 ||
-          statusCode === -1 ||
-          /cancel|expir|refund|timeout|not.?available|fail/.test(statusText);
-
-        if (dead) {
-          const r = await refundOrder(
-            admin,
-            order,
-            `Auto-refund – SMSPool status ${statusCode}: ${statusText || "cancelled"}`
-          );
-          return NextResponse.json({
-            status: "expired",
-            refunded: r.refunded,
-            balance: r.balance,
-            phone_number: order.phone_number,
-            message: "Number cancelled by provider. Wallet refunded.",
-          });
-        }
-
-        return NextResponse.json({
-          status: "waiting_sms",
-          phone_number: order.phone_number || result?.number,
-          time_left: result?.time_left,
-        });
       } catch (smsErr: any) {
-        console.error("SMSPool check error", smsErr);
+        console.error("Provider check error", smsErr);
       }
     }
 
@@ -190,5 +189,18 @@ export async function POST(
       { error: err.message || "Check failed" },
       { status: 500 }
     );
+  }
+}
+
+async function cancelProviderOrder(order: any) {
+  if (!order?.smspool_order_id) return;
+  try {
+    if ((order.provider || "smspool") === "fivesim") {
+      await fiveSimCancel(order.smspool_order_id);
+    } else if (process.env.SMSPOOL_API_KEY) {
+      await cancelSMS(order.smspool_order_id);
+    }
+  } catch {
+    /* ignore */
   }
 }
