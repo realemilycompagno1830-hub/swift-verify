@@ -34,7 +34,15 @@ export async function GET() {
     const usdNgnRate = Number(process.env.FALLBACK_USD_NGN_RATE) || 1600;
 
     const fivesimMarkup = Number(fivesimMarginRow?.value?.markup_percent ?? 100);
-    const rubNgnRate = Number(fivesimMarginRow?.value?.rub_ngn_rate ?? 18);
+    // 5sim prices are USD on their site; use usd_ngn_rate (fallback: env rate, not 18)
+    const rubNgnRate = Number(
+      fivesimMarginRow?.value?.usd_ngn_rate ??
+      (fivesimMarginRow?.value?.rub_ngn_rate && Number(fivesimMarginRow.value.rub_ngn_rate) > 100
+        ? fivesimMarginRow.value.rub_ngn_rate
+        : null) ??
+      process.env.FALLBACK_USD_NGN_RATE ??
+      1600
+    );
 
     // Overrides for active provider (provider column optional — treat null as smspool)
     const overrideMap: Record<string, number> = {};
