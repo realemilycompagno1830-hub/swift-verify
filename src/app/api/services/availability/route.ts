@@ -10,6 +10,32 @@ import {
 
 const MIN_SUCCESS = Number(process.env.MIN_SUCCESS_RATE || 50);
 
+const PRETTY_COUNTRY: Record<string, string> = {
+  usa: "United States",
+  england: "United Kingdom",
+  russia: "Russia",
+  canada: "Canada",
+  germany: "Germany",
+  france: "France",
+  netherlands: "Netherlands",
+  nigeria: "Nigeria",
+  india: "India",
+  indonesia: "Indonesia",
+  philippines: "Philippines",
+  australia: "Australia",
+  brazil: "Brazil",
+  mexico: "Mexico",
+  spain: "Spain",
+  italy: "Italy",
+  turkey: "Turkey",
+  ukraine: "Ukraine",
+  kenya: "Kenya",
+  southafrica: "South Africa",
+  poland: "Poland",
+  reunion: "Reunion",
+};
+
+
 export async function GET(req: NextRequest) {
   try {
     const service =
@@ -174,11 +200,15 @@ export async function GET(req: NextRequest) {
         countries.push({
           id: country,
           code,
-          name: name.charAt(0).toUpperCase() + name.slice(1),
+          name:
+            PRETTY_COUNTRY[String(country).toLowerCase()] ||
+            name.charAt(0).toUpperCase() + name.slice(1),
           priceNaira,
+          finalNaira: priceNaira,
           successRate: 100,
           stock: bestCount,
           costUsd: bestCost,
+          priceUsd: bestCost,
         });
       }
 
@@ -246,8 +276,10 @@ export async function GET(req: NextRequest) {
           code,
           name,
           priceNaira,
+          finalNaira: priceNaira,
           successRate: success,
           stock: r.stock ?? 1,
+          priceUsd,
         };
       })
       .filter(Boolean)
