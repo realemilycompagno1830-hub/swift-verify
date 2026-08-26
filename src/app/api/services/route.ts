@@ -58,7 +58,7 @@ export async function GET() {
     }
 
     // Clean services list
-    const services =
+    const services: { id: string; name: string; manual?: boolean }[] =
       smspoolServices.length > 0
         ? smspoolServices
             .map((s: any) => ({
