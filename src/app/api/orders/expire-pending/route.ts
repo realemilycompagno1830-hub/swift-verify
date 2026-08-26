@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { cancelSMS } from "@/lib/smspool";
+import { cancelOrder as fiveSimCancel } from "@/lib/fivesim";
+import { safeRefundSmsOrder } from "@/lib/wallet";
 
-const AUTO_EXPIRE_MS = 10 * 60 * 1000;
+const AUTO_EXPIRE_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
  * POST /api/orders/expire-pending
- * Refunds the current user's waiting orders older than 5 minutes.
- * Dashboard calls this on load so refunds happen even if user left the page.
+ * Refunds current user's waiting orders older than 10 minutes — once each.
  */
 export async function POST() {
   try {
@@ -33,48 +34,28 @@ export async function POST() {
     let totalRefund = 0;
 
     for (const order of stale || []) {
-      if (order.smspool_order_id && process.env.SMSPOOL_API_KEY) {
-        try {
-          await cancelSMS(order.smspool_order_id);
-        } catch {
-          /* continue */
+      try {
+        if (order.smspool_order_id) {
+          if ((order.provider || "smspool") === "fivesim") {
+            await fiveSimCancel(order.smspool_order_id).catch(() => {});
+          } else if (process.env.SMSPOOL_API_KEY) {
+            await cancelSMS(order.smspool_order_id).catch(() => {});
+          }
         }
+      } catch {
+        /* continue */
       }
 
-      const { data: profile } = await admin
-        .from("profiles")
-        .select("balance")
-        .eq("id", user.id)
-        .single();
-
-      const current = Number(profile?.balance || 0);
-      const refund = Number(order.cost_naira);
-      const newBalance = Math.round((current + refund) * 100) / 100;
-
-      await admin
-        .from("profiles")
-        .update({ balance: newBalance, updated_at: new Date().toISOString() })
-        .eq("id", user.id);
-
-      await admin.from("transactions").insert({
-        user_id: user.id,
-        type: "refund",
-        amount: refund,
-        balance_after: newBalance,
-        description: `Auto-refund expired order – ${order.service_name}`,
-        reference: order.id,
-      });
-
-      await admin
-        .from("orders")
-        .update({
-          status: "expired",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", order.id);
-
-      refundedCount++;
-      totalRefund += refund;
+      const r = await safeRefundSmsOrder(
+        admin,
+        order,
+        `Auto-refund expired – ${order.service_name || "SMS"}`,
+        "expired"
+      );
+      if (r.refunded) {
+        refundedCount++;
+        totalRefund += r.amount;
+      }
     }
 
     const { data: profile } = await admin
