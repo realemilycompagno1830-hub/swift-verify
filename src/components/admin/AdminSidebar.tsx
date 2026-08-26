@@ -7,6 +7,7 @@ const NAV = [
   { href: "/admin", label: "Dashboard", icon: "⌂" },
   { href: "/admin/settings", label: "Global Settings", icon: "⚙" },
   { href: "/admin/price-config", label: "Price Config", icon: "₦" },
+  { href: "/admin/sms-provider", label: "SMS Provider", icon: "☎" },
   { href: "/admin/accounts", label: "Account Products", icon: "👤" },
   { href: "/admin/menu-builder", label: "Menu Builder", icon: "☰" },
   { href: "/admin/footer", label: "Footer Editor", icon: "▦" },
