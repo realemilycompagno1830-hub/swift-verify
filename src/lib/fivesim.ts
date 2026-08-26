@@ -246,7 +246,22 @@ export function flattenFiveSimPrices(prices: any): {
   return { services, countries, priceMap };
 }
 
+export function calcNairaFromFiveSimUsd(
+  costUsd: number,
+  usdNgnRate: number,
+  markupPercent: number
+): number {
+  return Math.max(
+    1,
+    Math.ceil(
+      Number(costUsd) * Number(usdNgnRate) * (1 + Number(markupPercent) / 100)
+    )
+  );
+}
+
+/** @deprecated 5sim guest costs are USD; prefer calcNairaFromFiveSimUsd */
 export function calcNairaFromFiveSimRub(
+
   costRub: number,
   rubNgnRate: number,
   markupPercent: number
