@@ -4,11 +4,11 @@ import { cancelSMS } from "@/lib/smspool";
 import { cancelOrder as fiveSimCancel } from "@/lib/fivesim";
 import { safeRefundSmsOrder } from "@/lib/wallet";
 
-const AUTO_EXPIRE_MS = 10 * 60 * 1000; // 10 minutes
+const AUTO_EXPIRE_MS = 15 * 60 * 1000; // 15 minutes
 
 /**
  * POST /api/orders/expire-pending
- * Refunds current user's waiting orders older than 10 minutes — once each.
+ * Refunds current user's waiting orders older than 15 minutes — once each.
  */
 export async function POST() {
   try {
