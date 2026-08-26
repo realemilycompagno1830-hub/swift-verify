@@ -96,13 +96,16 @@ export async function GET(req: NextRequest) {
         if (raw[product] && typeof raw[product] === "object") {
           byCountry = raw[product];
         } else if (
-          Object.values(raw).some(
-            (v: any) => v && typeof v === "object" && (v.cost != null || Object.values(v)[0]?.cost != null)
-          )
+          Object.values(raw).some((v: any) => {
+            if (!v || typeof v !== "object") return false;
+            if (v.cost != null) return true;
+            const first = Object.values(v)[0] as any;
+            return first != null && typeof first === "object" && first.cost != null;
+          })
         ) {
           // might be country -> operators already
           const firstKey = Object.keys(raw)[0];
-          const firstVal = raw[firstKey];
+          const firstVal: any = raw[firstKey];
           if (firstVal?.cost != null || firstVal?.virtual34 || firstVal?.any) {
             byCountry = raw;
           } else if (raw[product]) {
