@@ -17,7 +17,7 @@ interface Override {
 export default function PriceConfigPage() {
   const [globalMarkup, setGlobalMarkup] = useState(150);
   const [fivesimMarkup, setFivesimMarkup] = useState(100);
-  const [rubNgnRate, setRubNgnRate] = useState(18);
+  const [rubNgnRate, setRubNgnRate] = useState(1600);
   const [overrideProvider, setOverrideProvider] = useState<'smspool' | 'fivesim'>('smspool');
   const [overrides, setOverrides] = useState<Override[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,7 +52,9 @@ export default function PriceConfigPage() {
       if (fiveRow?.value?.markup_percent != null) {
         setFivesimMarkup(Number(fiveRow.value.markup_percent));
       }
-      if (fiveRow?.value?.rub_ngn_rate != null) {
+      if (fiveRow?.value?.usd_ngn_rate != null) {
+        setRubNgnRate(Number(fiveRow.value.usd_ngn_rate));
+      } else if (fiveRow?.value?.rub_ngn_rate != null && Number(fiveRow.value.rub_ngn_rate) > 100) {
         setRubNgnRate(Number(fiveRow.value.rub_ngn_rate));
       }
       setOverrides(ovr || []);
@@ -87,7 +89,7 @@ export default function PriceConfigPage() {
     try {
       const { error } = await supabase.from("site_settings").upsert({
         key: "fivesim_margin",
-        value: { markup_percent: fivesimMarkup, rub_ngn_rate: rubNgnRate },
+        value: { markup_percent: fivesimMarkup, usd_ngn_rate: rubNgnRate, rub_ngn_rate: rubNgnRate },
         updated_at: new Date().toISOString(),
       });
       if (error) throw error;
