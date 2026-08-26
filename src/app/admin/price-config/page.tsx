@@ -16,6 +16,9 @@ interface Override {
 
 export default function PriceConfigPage() {
   const [globalMarkup, setGlobalMarkup] = useState(150);
+  const [fivesimMarkup, setFivesimMarkup] = useState(100);
+  const [rubNgnRate, setRubNgnRate] = useState(18);
+  const [overrideProvider, setOverrideProvider] = useState<'smspool' | 'fivesim'>('smspool');
   const [overrides, setOverrides] = useState<Override[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -23,6 +26,7 @@ export default function PriceConfigPage() {
 
   // New override form
   const [newService, setNewService] = useState("WhatsApp");
+  // overrideProvider state declared above
   const [newCountry, setNewCountry] = useState("US");
   const [newCountryName, setNewCountryName] = useState("United States");
   const [newPrice, setNewPrice] = useState("");
@@ -36,13 +40,20 @@ export default function PriceConfigPage() {
   async function load() {
     setLoading(true);
     try {
-      const [{ data: marginRow }, { data: ovr }] = await Promise.all([
-        supabase.from("site_settings").select("value").eq("key", "global_margin").single(),
+      const [{ data: marginRow }, { data: fiveRow }, { data: ovr }] = await Promise.all([
+        supabase.from("site_settings").select("value").eq("key", "global_margin").maybeSingle(),
+        supabase.from("site_settings").select("value").eq("key", "fivesim_margin").maybeSingle(),
         supabase.from("price_overrides").select("*").order("service_name"),
       ]);
 
       if (marginRow?.value?.markup_percent != null) {
         setGlobalMarkup(Number(marginRow.value.markup_percent));
+      }
+      if (fiveRow?.value?.markup_percent != null) {
+        setFivesimMarkup(Number(fiveRow.value.markup_percent));
+      }
+      if (fiveRow?.value?.rub_ngn_rate != null) {
+        setRubNgnRate(Number(fiveRow.value.rub_ngn_rate));
       }
       setOverrides(ovr || []);
     } catch (e) {
@@ -70,6 +81,24 @@ export default function PriceConfigPage() {
     }
   }
 
+  async function saveFivesimMargin() {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const { error } = await supabase.from("site_settings").upsert({
+        key: "fivesim_margin",
+        value: { markup_percent: fivesimMarkup, rub_ngn_rate: rubNgnRate },
+        updated_at: new Date().toISOString(),
+      });
+      if (error) throw error;
+      setMessage("5sim margin saved");
+    } catch (e: any) {
+      setMessage(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function addOverride() {
     if (!newService || !newCountry || !newPrice) return;
     setSaving(true);
@@ -83,6 +112,7 @@ export default function PriceConfigPage() {
             country_code: newCountry.trim().toUpperCase(),
             country_name: newCountryName.trim() || null,
             override_price_naira: Number(newPrice),
+            provider: overrideProvider,
             is_active: true,
             updated_at: new Date().toISOString(),
           },
@@ -167,7 +197,7 @@ export default function PriceConfigPage() {
           Price Configuration & Overrides
         </h2>
         <p className="text-sm text-gray-500 mt-1">
-          Global markup applies to all SMSPool base prices. Overrides force a
+          SMSPool markup applies only when SMS Provider is set to SMSPool. Use the 5sim section below when using 5sim.net. Overrides force a
           fixed ₦ price regardless of upstream changes.
         </p>
       </div>
