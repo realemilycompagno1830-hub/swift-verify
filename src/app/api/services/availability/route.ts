@@ -7,6 +7,13 @@ import {
   normalizeFiveSimProduct,
   calcNairaFromFiveSimUsd,
 } from "@/lib/fivesim";
+import {
+  SMSPVA_COUNTRIES,
+  normalizeSmspvaService,
+  getServicePrice,
+  getCount,
+  calcNairaFromUsd,
+} from "@/lib/smspva";
 
 const MIN_SUCCESS = Number(process.env.MIN_SUCCESS_RATE || 50);
 
@@ -54,6 +61,7 @@ export async function GET(req: NextRequest) {
     const [
       { data: marginRow },
       { data: fivesimMarginRow },
+      { data: smspvaMarginRow },
       { data: overrides },
       { data: prov },
     ] = await Promise.all([
@@ -67,6 +75,11 @@ export async function GET(req: NextRequest) {
         .select("value")
         .eq("key", "fivesim_margin")
         .maybeSingle(),
+      supabase
+        .from("site_settings")
+        .select("value")
+        .eq("key", "smspva_margin")
+        .maybeSingle(),
       supabase.from("price_overrides").select("*").eq("is_active", true),
       supabase
         .from("site_settings")
@@ -75,8 +88,13 @@ export async function GET(req: NextRequest) {
         .maybeSingle(),
     ]);
 
+    const rawActive = prov?.value?.active;
     const activeProvider =
-      prov?.value?.active === "fivesim" ? "fivesim" : "smspool";
+      rawActive === "fivesim"
+        ? "fivesim"
+        : rawActive === "smspva"
+        ? "smspva"
+        : "smspool";
 
     const smspoolMarkup = Number(marginRow?.value?.markup_percent ?? 150);
     const usdNgnRate = Number(process.env.FALLBACK_USD_NGN_RATE) || 1600;
@@ -225,6 +243,79 @@ export async function GET(req: NextRequest) {
           usdNgnRate: fivesimUsdNgn,
           note: "5sim costs treated as USD",
         },
+      });
+    }
+
+
+    if (activeProvider === "smspva") {
+      const product = normalizeSmspvaService(service);
+      const markup = Number(smspvaMarginRow?.value?.markup_percent ?? 100);
+      const rate = Number(
+        smspvaMarginRow?.value?.usd_ngn_rate ?? usdNgnRate
+      );
+      const countries: any[] = [];
+
+      // Query price/count for each known country (limited concurrency)
+      const list = SMSPVA_COUNTRIES;
+      for (const c of list) {
+        try {
+          let costUsd = 0;
+          let count = 0;
+          try {
+            const priceRes = await getServicePrice(c.code, product);
+            const p = Number(
+              priceRes?.price ?? priceRes?.data?.price ?? priceRes?.response
+            );
+            if (!Number.isNaN(p) && p > 0) costUsd = p;
+          } catch { /* */ }
+          try {
+            const countRes = await getCount(c.code, product);
+            // response can be number or { response: "123" }
+            const n = Number(
+              countRes?.online ??
+                countRes?.total ??
+                countRes?.count ??
+                countRes?.response ??
+                0
+            );
+            if (!Number.isNaN(n)) count = n;
+          } catch { /* */ }
+
+          // If we got a price, include even if count unknown; skip if both empty
+          if (costUsd <= 0 && count <= 0) continue;
+          if (costUsd <= 0) costUsd = 0.5; // fallback display so country shows
+
+          const oKey = `${product}-${c.code}`;
+          const oKey2 = `${String(service).toLowerCase()}-${c.code}`;
+          const override = overrideMap[oKey] ?? overrideMap[oKey2];
+          const priceNaira =
+            override != null
+              ? Number(override)
+              : calcNairaFromUsd(costUsd, rate, markup);
+
+          countries.push({
+            id: c.code,
+            code: c.code,
+            name: c.name,
+            priceNaira,
+            finalNaira: priceNaira,
+            successRate: 100,
+            stock: count > 0 ? count : 1,
+            priceUsd: costUsd,
+          });
+        } catch {
+          /* skip country */
+        }
+      }
+
+      countries.sort((a, b) => a.name.localeCompare(b.name));
+      return NextResponse.json({
+        provider: "smspva",
+        service,
+        product,
+        countries,
+        total: countries.length,
+        pricing: { markupPercent: markup, usdNgnRate: rate },
       });
     }
 
