@@ -19,6 +19,8 @@ export default function PriceConfigPage() {
   const [smspoolMarkup, setSmspoolMarkup] = useState(155);
   const [fivesimMarkup, setFivesimMarkup] = useState(100);
   const [fivesimUsdRate, setFivesimUsdRate] = useState(1600);
+  const [smspvaMarkup, setSmspvaMarkup] = useState(100);
+  const [smspvaUsdRate, setSmspvaUsdRate] = useState(1600);
   const [overrides, setOverrides] = useState<Override[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -41,7 +43,7 @@ export default function PriceConfigPage() {
   async function load() {
     setLoading(true);
     try {
-      const [{ data: marginRow }, { data: fiveRow }, { data: ovr }] =
+      const [{ data: marginRow }, { data: fiveRow }, { data: pvaRow }, { data: ovr }] =
         await Promise.all([
           supabase
             .from("site_settings")
@@ -52,6 +54,11 @@ export default function PriceConfigPage() {
             .from("site_settings")
             .select("value")
             .eq("key", "fivesim_margin")
+            .maybeSingle(),
+          supabase
+            .from("site_settings")
+            .select("value")
+            .eq("key", "smspva_margin")
             .maybeSingle(),
           supabase.from("price_overrides").select("*").order("service_name"),
         ]);
@@ -66,6 +73,12 @@ export default function PriceConfigPage() {
         fiveRow?.value?.usd_ngn_rate ?? fiveRow?.value?.rub_ngn_rate;
       if (rate != null && Number(rate) > 100) {
         setFivesimUsdRate(Number(rate));
+      }
+      if (pvaRow?.value?.markup_percent != null) {
+        setSmspvaMarkup(Number(pvaRow.value.markup_percent));
+      }
+      if (pvaRow?.value?.usd_ngn_rate != null) {
+        setSmspvaUsdRate(Number(pvaRow.value.usd_ngn_rate));
       }
       setOverrides(ovr || []);
     } catch (e) {
@@ -109,6 +122,27 @@ export default function PriceConfigPage() {
       setMessage(
         "5sim margin saved. Formula: USD × rate × (1 + markup/100)"
       );
+    } catch (e: any) {
+      setMessage(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveSmspvaMargin() {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const { error } = await supabase.from("site_settings").upsert({
+        key: "smspva_margin",
+        value: {
+          markup_percent: smspvaMarkup,
+          usd_ngn_rate: smspvaUsdRate,
+        },
+        updated_at: new Date().toISOString(),
+      });
+      if (error) throw error;
+      setMessage("SMSPVA margin saved");
     } catch (e: any) {
       setMessage(e.message);
     } finally {
@@ -288,9 +322,56 @@ export default function PriceConfigPage() {
         </p>
       </div>
 
+      {/* SMSPVA */}
+      <div className="bg-white border-2 border-emerald-100 rounded-xl p-6 space-y-3">
+        <h3 className="font-semibold text-lg">3. SMSPVA pricing</h3>
+        <p className="text-xs text-gray-500">
+          Used only when Active provider = <strong>SMSPVA</strong>.
+          Prices in USD. Formula: USD × rate × (1 + markup% / 100)
+        </p>
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">Markup %</label>
+            <input
+              type="number"
+              value={smspvaMarkup}
+              onChange={(e) => setSmspvaMarkup(Number(e.target.value))}
+              className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              min={0}
+              step={5}
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">USD → NGN rate</label>
+            <input
+              type="number"
+              value={smspvaUsdRate}
+              onChange={(e) => setSmspvaUsdRate(Number(e.target.value))}
+              className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              min={100}
+              step={10}
+            />
+          </div>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={saveSmspvaMargin}
+            className="bg-emerald-600 text-white text-sm font-semibold px-4 py-2 rounded-lg"
+          >
+            Save SMSPVA margin
+          </button>
+        </div>
+        <p className="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2">
+          Example: $0.71 UK Facebook →{" "}
+          <strong>
+            ₦{Math.ceil(0.71 * smspvaUsdRate * (1 + smspvaMarkup / 100)).toLocaleString()}
+          </strong>
+        </p>
+      </div>
+
       {/* Overrides */}
       <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-4">
-        <h3 className="font-semibold">3. Fixed ₦ overrides (optional)</h3>
+        <h3 className="font-semibold">4. Fixed ₦ overrides (optional)</h3>
         <p className="text-xs text-gray-500">
           Forces an exact Naira price for a service + country. Choose which
           provider the rule applies to.
@@ -307,6 +388,7 @@ export default function PriceConfigPage() {
             >
               <option value="smspool">SMSPool</option>
               <option value="fivesim">5sim</option>
+              <option value="smspva">SMSPVA</option>
             </select>
           </div>
           <div>
