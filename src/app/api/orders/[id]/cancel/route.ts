@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { cancelSMS } from "@/lib/smspool";
 import { cancelOrder as fiveSimCancel } from "@/lib/fivesim";
+import { cancelNumber as smspvaCancel } from "@/lib/smspva";
 import { safeRefundSmsOrder } from "@/lib/wallet";
 
 export async function POST(
@@ -41,8 +42,15 @@ export async function POST(
 
     try {
       if (order.smspool_order_id) {
-        if ((order.provider || "smspool") === "fivesim") {
+        const p = order.provider || "smspool";
+        if (p === "fivesim") {
           await fiveSimCancel(order.smspool_order_id);
+        } else if (p === "smspva") {
+          await smspvaCancel(
+            order.smspool_order_id,
+            order.country_code || "US",
+            order.service_id || order.service_name || ""
+          );
         } else if (process.env.SMSPOOL_API_KEY) {
           await cancelSMS(order.smspool_order_id);
         }
