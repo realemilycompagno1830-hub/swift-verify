@@ -6,7 +6,10 @@ async function requireAdmin() {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  if (!user)
+    return {
+      error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
+    };
   const admin = createAdminClient();
   const { data: profile } = await admin
     .from("profiles")
@@ -14,10 +17,14 @@ async function requireAdmin() {
     .eq("id", user.id)
     .single();
   if (profile?.role !== "admin") {
-    return { error: NextResponse.json({ error: "Admin only" }, { status: 403 }) };
+    return {
+      error: NextResponse.json({ error: "Admin only" }, { status: 403 }),
+    };
   }
   return { admin, user };
 }
+
+const PROVIDERS = ["smspool", "fivesim", "smspva"] as const;
 
 export async function GET() {
   try {
@@ -26,23 +33,33 @@ export async function GET() {
     const admin = gate.admin!;
 
     const [{ data: settings }, { data: manuals }] = await Promise.all([
-      admin.from("site_settings").select("value").eq("key", "sms_provider").maybeSingle(),
+      admin
+        .from("site_settings")
+        .select("value")
+        .eq("key", "sms_provider")
+        .maybeSingle(),
       admin
         .from("sms_manual_services")
         .select("*")
         .order("created_at", { ascending: false }),
     ]);
 
+    const active = PROVIDERS.includes(settings?.value?.active)
+      ? settings!.value.active
+      : "smspool";
+
     return NextResponse.json({
-      provider: settings?.value || {
-        active: "smspool",
+      provider: {
+        active,
         smspool_enabled: true,
         fivesim_enabled: true,
+        smspva_enabled: true,
       },
       manuals: manuals || [],
       env: {
         smspoolKeySet: !!process.env.SMSPOOL_API_KEY,
         fivesimKeySet: !!process.env.FIVESIM_API_KEY,
+        smspvaKeySet: !!process.env.SMSPVA_API_KEY,
       },
     });
   } catch (e: any) {
@@ -58,13 +75,14 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
 
     if (body.action === "set_provider") {
-      const active = body.active === "fivesim" ? "fivesim" : "smspool";
+      const active = PROVIDERS.includes(body.active) ? body.active : "smspool";
       await admin.from("site_settings").upsert({
         key: "sms_provider",
         value: {
           active,
           smspool_enabled: true,
           fivesim_enabled: true,
+          smspva_enabled: true,
         },
         updated_at: new Date().toISOString(),
       });
@@ -72,7 +90,9 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.action === "add_manual") {
-      const provider = body.provider === "fivesim" ? "fivesim" : "smspool";
+      const provider = PROVIDERS.includes(body.provider)
+        ? body.provider
+        : "smspool";
       const service_id = String(body.service_id || "").trim();
       const service_name = String(body.service_name || "").trim();
       if (!service_id || !service_name) {
@@ -88,8 +108,12 @@ export async function POST(req: NextRequest) {
             provider,
             service_id,
             service_name,
-            country_code: body.country_code ? String(body.country_code).trim() : null,
-            country_name: body.country_name ? String(body.country_name).trim() : null,
+            country_code: body.country_code
+              ? String(body.country_code).trim()
+              : null,
+            country_name: body.country_name
+              ? String(body.country_name).trim()
+              : null,
             is_active: true,
             notes: body.notes || null,
           },
