@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { checkSMS, cancelSMS } from "@/lib/smspool";
 import { checkOrder as fiveSimCheck, cancelOrder as fiveSimCancel } from "@/lib/fivesim";
+import { getSms as smspvaGetSms, cancelNumber as smspvaCancel } from "@/lib/smspva";
 import { safeRefundSmsOrder } from "@/lib/wallet";
 
 const AUTO_EXPIRE_MS = 15 * 60 * 1000; // 15 minutes
@@ -68,7 +69,29 @@ export async function POST(
 
     if (order.smspool_order_id) {
       try {
-        if (provider === "fivesim") {
+        if (provider === "smspva") {
+          const result = await smspvaGetSms(
+            order.smspool_order_id,
+            order.country_code || "US",
+            order.service_id || order.service_name || ""
+          );
+          if (result?.status === "ok" && result.sms) {
+            await admin
+              .from("orders")
+              .update({
+                status: "completed",
+                otp_code: String(result.sms),
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", order.id)
+              .in("status", ["pending", "waiting_sms"]);
+            return NextResponse.json({
+              status: "completed",
+              otp_code: String(result.sms),
+              phone_number: order.phone_number || result.number,
+            });
+          }
+        } else if (provider === "fivesim") {
           const result = await fiveSimCheck(order.smspool_order_id);
           const status = String(result?.status || "").toUpperCase();
           const smsList = Array.isArray(result?.sms) ? result.sms : [];
@@ -195,8 +218,15 @@ export async function POST(
 async function cancelProviderOrder(order: any) {
   if (!order?.smspool_order_id) return;
   try {
-    if ((order.provider || "smspool") === "fivesim") {
+    const p = order.provider || "smspool";
+    if (p === "fivesim") {
       await fiveSimCancel(order.smspool_order_id);
+    } else if (p === "smspva") {
+      await smspvaCancel(
+        order.smspool_order_id,
+        order.country_code || "US",
+        order.service_id || order.service_name || ""
+      );
     } else if (process.env.SMSPOOL_API_KEY) {
       await cancelSMS(order.smspool_order_id);
     }
