@@ -5,6 +5,7 @@ import {
   listPricesGuest,
   flattenFiveSimPrices,
 } from "@/lib/fivesim";
+import { SMSPVA_SERVICES, SMSPVA_COUNTRIES } from "@/lib/smspva";
 
 /**
  * GET /api/services
@@ -18,17 +19,24 @@ export async function GET() {
     const [
       { data: marginRow },
       { data: fivesimMarginRow },
+      { data: smspvaMarginRow },
       { data: overrides },
       { data: prov },
     ] = await Promise.all([
       supabase.from("site_settings").select("value").eq("key", "global_margin").maybeSingle(),
       supabase.from("site_settings").select("value").eq("key", "fivesim_margin").maybeSingle(),
+      supabase.from("site_settings").select("value").eq("key", "smspva_margin").maybeSingle(),
       supabase.from("price_overrides").select("*").eq("is_active", true),
       supabase.from("site_settings").select("value").eq("key", "sms_provider").maybeSingle(),
     ]);
 
+    const rawActive = prov?.value?.active;
     const activeProvider =
-      prov?.value?.active === "fivesim" ? "fivesim" : "smspool";
+      rawActive === "fivesim"
+        ? "fivesim"
+        : rawActive === "smspva"
+        ? "smspva"
+        : "smspool";
 
     const smspoolMarkup = Number(marginRow?.value?.markup_percent ?? 150);
     const usdNgnRate = Number(process.env.FALLBACK_USD_NGN_RATE) || 1600;
@@ -73,6 +81,14 @@ export async function GET() {
       } catch (err) {
         console.error("5sim prices failed:", err);
       }
+    } else if (activeProvider === "smspva") {
+      services = SMSPVA_SERVICES.map((s) => ({ id: s.id, name: s.name }));
+      countries = SMSPVA_COUNTRIES.map((c) => ({
+        id: c.code,
+        code: c.code,
+        name: c.name,
+      }));
+      live = services.length > 0;
     } else if (process.env.SMSPOOL_API_KEY) {
       try {
         const [svcRes, ctryRes] = await Promise.all([
@@ -164,7 +180,13 @@ export async function GET() {
       countries,
       priceMap,
       overrides: overrideMap,
-      globalMarkup: activeProvider === "fivesim" ? fivesimMarkup : smspoolMarkup,
+      globalMarkup:
+        activeProvider === "fivesim"
+          ? fivesimMarkup
+          : activeProvider === "smspva"
+          ? Number(smspvaMarginRow?.value?.markup_percent ?? 100)
+          : smspoolMarkup,
+      smspvaMarkup: Number(smspvaMarginRow?.value?.markup_percent ?? 100),
       usdNgnRate,
       rubNgnRate,
       fivesimMarkup,
