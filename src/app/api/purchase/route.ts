@@ -6,6 +6,7 @@ import {
   normalizeFiveSimCountry,
   normalizeFiveSimProduct,
 } from "@/lib/fivesim";
+import { getNumber as smspvaGetNumber } from "@/lib/smspva";
 
 const EXPIRE_MS = 15 * 60 * 1000;
 
@@ -44,8 +45,9 @@ export async function POST(req: NextRequest) {
       .select("value")
       .eq("key", "sms_provider")
       .maybeSingle();
-    const provider: "smspool" | "fivesim" =
-      provRow?.value?.active === "fivesim" ? "fivesim" : "smspool";
+    const raw = provRow?.value?.active;
+    const provider: "smspool" | "fivesim" | "smspva" =
+      raw === "fivesim" ? "fivesim" : raw === "smspva" ? "smspva" : "smspool";
 
     const { data: profile, error: profileErr } = await admin
       .from("profiles")
@@ -97,7 +99,19 @@ export async function POST(req: NextRequest) {
     let status = "pending";
 
     try {
-      if (provider === "fivesim") {
+      if (provider === "smspva") {
+        if (!process.env.SMSPVA_API_KEY) {
+          throw new Error("SMSPVA is selected but SMSPVA_API_KEY is not set");
+        }
+        const result = await smspvaGetNumber(
+          String(countryCode || countryName || ""),
+          String(serviceId || serviceName || "")
+        );
+        externalOrderId = result.id;
+        phoneNumber = result.number;
+        if (!externalOrderId) throw new Error("SMSPVA did not return an order id");
+        status = "waiting_sms";
+      } else if (provider === "fivesim") {
         if (!process.env.FIVESIM_API_KEY) {
           throw new Error("5sim is selected but FIVESIM_API_KEY is not set");
         }
