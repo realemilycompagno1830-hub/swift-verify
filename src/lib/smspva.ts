@@ -21,37 +21,38 @@ function assertKey() {
 }
 
 /** Popular service codes used by SMSPVA (opt*) */
+/** Official SMSPVA service codes (from docs.smspva.com services list) */
 export const SMSPVA_SERVICES: { id: string; name: string }[] = [
-  { id: "opt20", name: "Facebook" },
-  { id: "opt1", name: "WhatsApp" },
-  { id: "opt16", name: "Telegram" },
-  { id: "opt29", name: "Instagram" },
-  { id: "opt81", name: "TikTok" },
+  { id: "opt2", name: "Facebook" },
+  { id: "opt16", name: "WhatsApp" },
+  { id: "opt29", name: "Telegram" },
+  { id: "opt1", name: "Instagram" },
+  { id: "opt198", name: "TikTok" },
   { id: "opt25", name: "Google" },
   { id: "opt45", name: "Discord" },
   { id: "opt22", name: "Twitter / X" },
   { id: "opt9", name: "Viber" },
-  { id: "opt10", name: "WeChat" },
-  { id: "opt19", name: "Amazon" },
-  { id: "opt15", name: "Microsoft" },
-  { id: "opt28", name: "Yahoo" },
-  { id: "opt6", name: "Airbnb" },
-  { id: "opt7", name: "Uber" },
-  { id: "opt8", name: "Tinder" },
-  { id: "opt2", name: "VK" },
-  { id: "opt4", name: "Mail.ru" },
+  { id: "opt44", name: "Amazon" },
+  { id: "opt131", name: "Apple" },
   { id: "opt86", name: "PayPal" },
   { id: "opt100", name: "Signal" },
   { id: "opt14", name: "Steam" },
-  { id: "opt21", name: "Twitch" },
-  { id: "opt23", name: "Netflix" },
-  { id: "opt43", name: "Apple" },
-  { id: "opt27", name: "Yandex" },
-  { id: "opt61", name: "Badoo" },
+  { id: "opt8", name: "Tinder" },
   { id: "opt56", name: "Snapchat" },
   { id: "opt32", name: "LinkedIn" },
-  { id: "opt39", name: "OkCupid" },
+  { id: "opt23", name: "Netflix" },
   { id: "opt38", name: "eBay" },
+  { id: "opt46", name: "Airbnb" },
+  { id: "opt7", name: "Uber" },
+  { id: "opt132", name: "OpenAI / ChatGPT" },
+  { id: "opt19", name: "Other" },
+  { id: "opt81", name: "Bolt" },
+  { id: "opt112", name: "Coinbase" },
+  { id: "opt40", name: "DoorDash" },
+  { id: "opt53", name: "Deliveroo" },
+  { id: "opt98", name: "Clubhouse" },
+  { id: "opt145", name: "Bumble" },
+  { id: "opt78", name: "Blizzard" },
 ];
 
 export const SMSPVA_COUNTRIES: {
@@ -114,22 +115,23 @@ export function normalizeSmspvaService(input: string): string {
   const s = String(input || "").toLowerCase().trim();
   if (s.startsWith("opt")) return s;
   const map: Record<string, string> = {
-    facebook: "opt20",
-    "facebook / meta viewpoints": "opt20",
-    whatsapp: "opt1",
-    telegram: "opt16",
-    instagram: "opt29",
-    "instagram (+threads)": "opt29",
-    tiktok: "opt81",
+    facebook: "opt2",
+    "facebook / meta viewpoints": "opt2",
+    whatsapp: "opt16",
+    telegram: "opt29",
+    instagram: "opt1",
+    "instagram (+threads)": "opt1",
+    tiktok: "opt198",
     google: "opt25",
+    gmail: "opt25",
     discord: "opt45",
     twitter: "opt22",
     "twitter / x": "opt22",
     x: "opt22",
     viber: "opt9",
-    amazon: "opt19",
+    amazon: "opt44",
     microsoft: "opt15",
-    apple: "opt43",
+    apple: "opt131",
     paypal: "opt86",
     signal: "opt100",
     steam: "opt14",
@@ -138,6 +140,11 @@ export function normalizeSmspvaService(input: string): string {
     linkedin: "opt32",
     netflix: "opt23",
     ebay: "opt38",
+    airbnb: "opt46",
+    uber: "opt7",
+    openai: "opt132",
+    chatgpt: "opt132",
+    other: "opt19",
   };
   for (const [k, v] of Object.entries(map)) {
     if (s.includes(k)) return v;
@@ -302,17 +309,33 @@ export async function getServicePrice(country: string, service: string) {
   });
 }
 
-/** Returns USD price only (0 if unknown) */
+/** Returns USD price only (0 if unknown). Prefers modern API; takes lowest sane price. */
 export async function getServicePriceUsd(
   country: string,
   service: string
 ): Promise<number> {
+  const c = normalizeSmspvaCountry(country);
+  const s = normalizeSmspvaService(service);
+
+  // 1) Modern: /activation/serviceprice/{country}/{service}
   try {
-    const res = await getServicePrice(country, service);
-    return normalizeActivationUsd(parseUsdPrice(res));
+    const json = await modernGet(`/activation/serviceprice/${c}/${s}`);
+    const p = normalizeActivationUsd(parseUsdPrice(json?.data ?? json));
+    if (p > 0) return p;
   } catch {
-    return 0;
+    /* fall through */
   }
+
+  // 2) Legacy get_service_price
+  try {
+    const res = await getServicePrice(c, s);
+    const p = normalizeActivationUsd(parseUsdPrice(res));
+    if (p > 0) return p;
+  } catch {
+    /* fall through */
+  }
+
+  return 0;
 }
 
 /**
