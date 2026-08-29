@@ -12,7 +12,10 @@ import { SMSPVA_SERVICES, SMSPVA_COUNTRIES } from "@/lib/smspva";
  * Returns services/countries for the ACTIVE SMS provider (smspool | fivesim)
  * plus margins and overrides for that provider.
  */
-export async function GET() {
+export async function GET(req: Request) {
+  const mode =
+    new URL(req.url).searchParams.get("mode") === "real" ? "real" : "voip";
+
   try {
     const supabase = await createClient();
 
@@ -30,9 +33,12 @@ export async function GET() {
       supabase.from("site_settings").select("value").eq("key", "sms_provider").maybeSingle(),
     ]);
 
+    // Customer mode drives catalog: real → smspva; voip → merge pool+5sim labels
     const rawActive = prov?.value?.active;
     const activeProvider =
-      rawActive === "fivesim"
+      mode === "real"
+        ? "smspva"
+        : rawActive === "fivesim"
         ? "fivesim"
         : rawActive === "smspva"
         ? "smspva"
@@ -135,6 +141,51 @@ export async function GET() {
       }
     }
 
+
+    // VOIP mode: union of SMSPool + 5sim service names (no supplier labels)
+    if (mode === "voip") {
+      try {
+        const { getServices } = await import("@/lib/smspool");
+        const { listPricesGuest, flattenFiveSimPrices } = await import(
+          "@/lib/fivesim"
+        );
+        const map = new Map<string, { id: string; name: string }>();
+        if (process.env.SMSPOOL_API_KEY) {
+          try {
+            const svcRes = await getServices();
+            const arr = Array.isArray(svcRes)
+              ? svcRes
+              : Array.isArray(svcRes?.data)
+              ? svcRes.data
+              : [];
+            for (const s of arr) {
+              const name = s.name || s.service_name;
+              if (!name) continue;
+              const id = String(s.ID || s.id || name);
+              map.set(name.toLowerCase(), { id, name });
+            }
+          } catch {}
+        }
+        try {
+          const prices = await listPricesGuest();
+          const flat = flattenFiveSimPrices(prices);
+          for (const s of flat.services) {
+            if (!map.has(s.name.toLowerCase())) {
+              map.set(s.name.toLowerCase(), s);
+            }
+          }
+        } catch {}
+        if (map.size > 0) {
+          services = Array.from(map.values()).sort((a, b) =>
+            a.name.localeCompare(b.name)
+          );
+          live = true;
+        }
+      } catch (e) {
+        console.error("voip services union", e);
+      }
+    }
+
     // Manual services for active provider
     try {
       const { data: manuals } = await supabase
@@ -175,6 +226,7 @@ export async function GET() {
     }
 
     return NextResponse.json({
+      mode,
       provider: activeProvider,
       services,
       countries,
