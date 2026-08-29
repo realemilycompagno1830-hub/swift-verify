@@ -362,6 +362,8 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
         countryCode: service.countryCode,
         countryName: service.countryName,
         priceNaira: service.finalNaira,
+        mode: service.mode || "voip",
+        providerHint: service.providerHint,
       }),
     });
 
