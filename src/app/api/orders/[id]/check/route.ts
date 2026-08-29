@@ -35,7 +35,17 @@ export async function POST(
       return NextResponse.json({ error: "Order not found" }, { status: 404 });
     }
 
-    if (["completed", "cancelled", "expired", "refunded"].includes(order.status)) {
+    // Already has OTP — done
+    if (order.status === "completed" && order.otp_code) {
+      return NextResponse.json({
+        status: "completed",
+        otp_code: order.otp_code,
+        phone_number: order.phone_number,
+      });
+    }
+
+    // Cancelled/refunded with no chance of code — stop
+    if (["cancelled", "refunded"].includes(order.status) && order.otp_code) {
       return NextResponse.json({
         status: order.status,
         otp_code: order.otp_code,
@@ -43,28 +53,11 @@ export async function POST(
       });
     }
 
+    // expired / completed-without-otp / cancelled-without-otp:
+    // still try provider once so codes that arrived on SMSPool are not lost
+
     const created = new Date(order.created_at).getTime();
     const age = Date.now() - created;
-    if (age > AUTO_EXPIRE_MS) {
-      // Cancel at provider best-effort
-      await cancelProviderOrder(order);
-      const r = await safeRefundSmsOrder(
-        admin,
-        order,
-        `Auto-refund – no SMS after 15 min (${order.service_name || "order"})`,
-        "expired"
-      );
-      return NextResponse.json({
-        status: "expired",
-        refunded: r.refunded,
-        balance: r.balance,
-        phone_number: order.phone_number,
-        message: r.refunded
-          ? "No SMS received in time. Wallet refunded."
-          : "Order already closed.",
-      });
-    }
-
     const provider = order.provider || "smspool";
 
     if (order.smspool_order_id) {
@@ -138,56 +131,85 @@ export async function POST(
             }
           }
         } else {
+          // SMSPool status codes:
+          // 1 = pending, 3 = completed (code received), 6 = refunded, 5 = cancelled, 2 = expired
           const result = await checkSMS(order.smspool_order_id);
-          const otp =
+          const statusCode = Number(result?.status);
+          const otpRaw =
             result?.sms ||
             result?.code ||
             result?.otp ||
+            (typeof result?.full_sms === "string"
+              ? result.full_sms.match(/\b(\d{4,8})\b/)?.[1]
+              : null) ||
             (typeof result?.message === "string" &&
             /^\d{3,8}$/.test(result.message)
               ? result.message
               : null);
+          const otp =
+            otpRaw != null && String(otpRaw).trim().length >= 3
+              ? String(otpRaw).trim()
+              : null;
 
-          const statusCode = Number(result?.status);
-          const statusText = String(
-            result?.status_message || result?.full_message || result?.message || ""
-          ).toLowerCase();
+          // Code received (status 3 or any response with sms field)
+          if (otp || statusCode === 3) {
+            const code = otp || String(result?.sms || result?.code || "").trim();
+            if (code && code.length >= 3) {
+              await admin
+                .from("orders")
+                .update({
+                  status: "completed",
+                  otp_code: code,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", order.id)
+                .in("status", [
+                  "pending",
+                  "waiting_sms",
+                  "expired",
+                  "cancelled",
+                ]);
 
-          if (otp && String(otp).length >= 3 && statusCode !== 0 && statusCode !== 3) {
-            await admin
-              .from("orders")
-              .update({
+              return NextResponse.json({
                 status: "completed",
-                otp_code: String(otp),
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", order.id)
-              .in("status", ["pending", "waiting_sms"]);
+                otp_code: code,
+                phone_number: order.phone_number || result?.number,
+              });
+            }
+          }
 
+          // Provider closed without code
+          if ([2, 5, 6].includes(statusCode)) {
+            // Only refund if we never delivered a code
+            if (!order.otp_code) {
+              const r = await safeRefundSmsOrder(
+                admin,
+                order,
+                `Auto-refund – provider status ${statusCode}`,
+                "expired"
+              );
+              return NextResponse.json({
+                status: "expired",
+                refunded: r.refunded,
+                balance: r.balance,
+                message: "Number closed by provider. Wallet refunded.",
+              });
+            }
             return NextResponse.json({
-              status: "completed",
-              otp_code: String(otp),
-              phone_number: order.phone_number || result?.number,
+              status: order.status,
+              otp_code: order.otp_code,
+              phone_number: order.phone_number,
             });
           }
 
-          const dead =
-            statusCode === 3 ||
-            statusCode === -1 ||
-            /cancel|expir|refund|timeout|not.?available|fail/.test(statusText);
-
-          if (dead) {
-            const r = await safeRefundSmsOrder(
-              admin,
-              order,
-              `Auto-refund – provider cancelled (${statusCode})`,
-              "expired"
-            );
+          // Still waiting (status 1 / 4 resend / etc.)
+          // If our local order already expired, don't keep it open forever
+          if (["expired", "cancelled", "refunded"].includes(order.status)) {
             return NextResponse.json({
-              status: "expired",
-              refunded: r.refunded,
-              balance: r.balance,
-              message: "Number cancelled by provider. Wallet refunded.",
+              status: order.status,
+              otp_code: order.otp_code,
+              phone_number: order.phone_number,
+              message: "No code found on provider for this order.",
             });
           }
 
@@ -202,9 +224,33 @@ export async function POST(
       }
     }
 
+    // No code from provider — if past wait window, expire + refund once
+    if (
+      age > AUTO_EXPIRE_MS &&
+      ["pending", "waiting_sms"].includes(order.status)
+    ) {
+      await cancelProviderOrder(order);
+      const r = await safeRefundSmsOrder(
+        admin,
+        order,
+        `Auto-refund – no SMS after 15 min (${order.service_name || "order"})`,
+        "expired"
+      );
+      return NextResponse.json({
+        status: "expired",
+        refunded: r.refunded,
+        balance: r.balance,
+        phone_number: order.phone_number,
+        message: r.refunded
+          ? "No SMS received in time. Wallet refunded."
+          : "Order already closed.",
+      });
+    }
+
     return NextResponse.json({
-      status: order.status,
+      status: order.status === "expired" ? "expired" : "waiting_sms",
       phone_number: order.phone_number,
+      otp_code: order.otp_code || null,
     });
   } catch (err: any) {
     console.error("Check error", err);
