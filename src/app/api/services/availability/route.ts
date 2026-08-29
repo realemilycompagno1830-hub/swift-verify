@@ -19,7 +19,10 @@ const MIN_SUCCESS = Number(process.env.MIN_SUCCESS_RATE || 50);
 
 const PRETTY_COUNTRY: Record<string, string> = {
   usa: "United States",
+  us: "United States",
   england: "United Kingdom",
+  uk: "United Kingdom",
+  gb: "United Kingdom",
   russia: "Russia",
   canada: "Canada",
   germany: "Germany",
@@ -39,15 +42,27 @@ const PRETTY_COUNTRY: Record<string, string> = {
   kenya: "Kenya",
   southafrica: "South Africa",
   poland: "Poland",
-  reunion: "Reunion",
 };
 
+function prettyName(code: string, fallback?: string) {
+  const k = String(code || "").toLowerCase();
+  return (
+    PRETTY_COUNTRY[k] ||
+    fallback ||
+    code.charAt(0).toUpperCase() + code.slice(1).toLowerCase()
+  );
+}
 
 export async function GET(req: NextRequest) {
   try {
     const service =
       req.nextUrl.searchParams.get("service") ||
       req.nextUrl.searchParams.get("serviceId");
+    // Customer-facing mode: voip (virtual) | real — never expose supplier names
+    const modeParam = (
+      req.nextUrl.searchParams.get("mode") || "voip"
+    ).toLowerCase();
+    const mode = modeParam === "real" ? "real" : "voip";
 
     if (!service) {
       return NextResponse.json(
@@ -63,7 +78,6 @@ export async function GET(req: NextRequest) {
       { data: fivesimMarginRow },
       { data: smspvaMarginRow },
       { data: overrides },
-      { data: prov },
     ] = await Promise.all([
       supabase
         .from("site_settings")
@@ -81,183 +95,51 @@ export async function GET(req: NextRequest) {
         .eq("key", "smspva_margin")
         .maybeSingle(),
       supabase.from("price_overrides").select("*").eq("is_active", true),
-      supabase
-        .from("site_settings")
-        .select("value")
-        .eq("key", "sms_provider")
-        .maybeSingle(),
     ]);
-
-    const rawActive = prov?.value?.active;
-    const activeProvider =
-      rawActive === "fivesim"
-        ? "fivesim"
-        : rawActive === "smspva"
-        ? "smspva"
-        : "smspool";
 
     const smspoolMarkup = Number(marginRow?.value?.markup_percent ?? 150);
     const usdNgnRate = Number(process.env.FALLBACK_USD_NGN_RATE) || 1600;
     const fivesimMarkup = Number(
       fivesimMarginRow?.value?.markup_percent ?? 100
     );
-    // 5sim guest prices are in USD (same as their website $ display)
     const fivesimUsdNgn = Number(
       fivesimMarginRow?.value?.usd_ngn_rate ??
-        fivesimMarginRow?.value?.rub_ngn_rate ?? // legacy key if set to ~1600
+        (fivesimMarginRow?.value?.rub_ngn_rate &&
+        Number(fivesimMarginRow.value.rub_ngn_rate) > 100
+          ? fivesimMarginRow.value.rub_ngn_rate
+          : null) ??
         usdNgnRate
     );
+    const smspvaMarkup = Number(smspvaMarginRow?.value?.markup_percent ?? 100);
+    const smspvaUsdNgn = Number(
+      smspvaMarginRow?.value?.usd_ngn_rate ?? usdNgnRate
+    );
 
-    const overrideMap: Record<string, number> = {};
-    (overrides || []).forEach((o: any) => {
-      const oProv = o.provider || "smspool";
-      if (oProv !== activeProvider) return;
-      const key = `${(o.service_name || "").toLowerCase()}-${(
-        o.country_code || ""
-      ).toUpperCase()}`;
-      if (o.override_price_naira) {
-        overrideMap[key] = Number(o.override_price_naira);
-      }
-    });
-
-    if (activeProvider === "fivesim") {
-      const product = normalizeFiveSimProduct(service);
-      let raw: any = null;
-
-      try {
-        raw = await getPricesByProductGuest(product);
-      } catch (e) {
-        console.error("5sim product prices failed", e);
-      }
-
-      // Response shapes we handle:
-      // A) { facebook: { usa: { virtual34: { cost, count } } } }
-      // B) { usa: { virtual34: { cost, count } } }
-      // C) full guest/prices filtered
-      let byCountry: Record<string, any> = {};
-
-      if (raw && typeof raw === "object") {
-        if (raw[product] && typeof raw[product] === "object") {
-          byCountry = raw[product];
-        } else if (
-          Object.values(raw).some((v: any) => {
-            if (!v || typeof v !== "object") return false;
-            if (v.cost != null) return true;
-            const first = Object.values(v)[0] as any;
-            return first != null && typeof first === "object" && first.cost != null;
-          })
+    const overrideFor = (provider: string, serviceName: string, code: string) => {
+      for (const o of overrides || []) {
+        const oProv = o.provider || "smspool";
+        if (oProv !== provider) continue;
+        const key = `${(o.service_name || "").toLowerCase()}-${(
+          o.country_code || ""
+        ).toUpperCase()}`;
+        const k2 = `${serviceName.toLowerCase()}-${code.toUpperCase()}`;
+        if (
+          o.override_price_naira &&
+          (key === k2 ||
+            key === `${serviceName.toLowerCase()}-${code.toUpperCase()}`)
         ) {
-          // might be country -> operators already
-          const firstKey = Object.keys(raw)[0];
-          const firstVal: any = raw[firstKey];
-          if (firstVal?.cost != null || firstVal?.virtual34 || firstVal?.any) {
-            byCountry = raw;
-          } else if (raw[product]) {
-            byCountry = raw[product];
-          } else {
-            byCountry = raw;
-          }
+          return Number(o.override_price_naira);
         }
       }
+      return null;
+    };
 
-      // Fallback: scan full price list
-      if (Object.keys(byCountry).length === 0) {
-        try {
-          const all = await listPricesGuest();
-          // all: { country: { product: { op: { cost, count } } } }
-          for (const [country, products] of Object.entries(all || {})) {
-            const p = (products as any)?.[product];
-            if (p) byCountry[country] = p;
-          }
-        } catch (e) {
-          console.error("5sim full prices fallback failed", e);
-        }
-      }
-
-      const countries: any[] = [];
-
-      for (const [country, operators] of Object.entries(byCountry)) {
-        if (!operators || typeof operators !== "object") continue;
-
-        let bestCost = Infinity;
-        let bestCount = 0;
-
-        // operators is either { cost, count } or { virtual34: { cost, count }, ... }
-        if ((operators as any).cost != null) {
-          bestCost = Number((operators as any).cost);
-          bestCount = Number((operators as any).count || 0);
-        } else {
-          for (const op of Object.values(operators as any)) {
-            if (!op || typeof op !== "object") continue;
-            const cost = Number((op as any).cost);
-            const count = Number((op as any).count || 0);
-            if (Number.isNaN(cost)) continue;
-            if (count <= 0) continue;
-            if (cost < bestCost) {
-              bestCost = cost;
-              bestCount = count;
-            } else if (cost === bestCost && count > bestCount) {
-              bestCount = count;
-            }
-          }
-        }
-
-        if (!(bestCost < Infinity) || bestCount <= 0) continue;
-
-        const code = String(country).toUpperCase();
-        const name = String(country);
-        const oKey = `${product}-${code}`;
-        const oKey2 = `${String(service).toLowerCase()}-${code}`;
-        const override = overrideMap[oKey] ?? overrideMap[oKey2];
-
-        const priceNaira =
-          override != null
-            ? Number(override)
-            : calcNairaFromFiveSimUsd(bestCost, fivesimUsdNgn, fivesimMarkup);
-
-        countries.push({
-          id: country,
-          code,
-          name:
-            PRETTY_COUNTRY[String(country).toLowerCase()] ||
-            name.charAt(0).toUpperCase() + name.slice(1),
-          priceNaira,
-          finalNaira: priceNaira,
-          successRate: 100,
-          stock: bestCount,
-          costUsd: bestCost,
-          priceUsd: bestCost,
-        });
-      }
-
-      countries.sort((a, b) => a.name.localeCompare(b.name));
-
-      return NextResponse.json({
-        provider: "fivesim",
-        service,
-        product,
-        countries,
-        total: countries.length,
-        pricing: {
-          markupPercent: fivesimMarkup,
-          usdNgnRate: fivesimUsdNgn,
-          note: "5sim costs treated as USD",
-        },
-      });
-    }
-
-
-    if (activeProvider === "smspva") {
+    // ——— REAL NUMBERS = SMSPVA only (never say SMSPVA to client) ———
+    if (mode === "real") {
       const product = normalizeSmspvaService(service);
-      const markup = Number(smspvaMarginRow?.value?.markup_percent ?? 100);
-      const rate = Number(
-        smspvaMarginRow?.value?.usd_ngn_rate ?? usdNgnRate
-      );
       const countries: any[] = [];
 
-      // Query price/count for each known country (limited concurrency)
-      const list = SMSPVA_COUNTRIES;
-      for (const c of list) {
+      for (const c of SMSPVA_COUNTRIES) {
         try {
           let costUsd = 0;
           let count = 0;
@@ -267,10 +149,11 @@ export async function GET(req: NextRequest) {
               priceRes?.price ?? priceRes?.data?.price ?? priceRes?.response
             );
             if (!Number.isNaN(p) && p > 0) costUsd = p;
-          } catch { /* */ }
+          } catch {
+            /* */
+          }
           try {
             const countRes = await getCount(c.code, product);
-            // response can be number or { response: "123" }
             const n = Number(
               countRes?.online ??
                 countRes?.total ??
@@ -279,19 +162,19 @@ export async function GET(req: NextRequest) {
                 0
             );
             if (!Number.isNaN(n)) count = n;
-          } catch { /* */ }
-
-          // If we got a price, include even if count unknown; skip if both empty
+          } catch {
+            /* */
+          }
           if (costUsd <= 0 && count <= 0) continue;
-          if (costUsd <= 0) costUsd = 0.5; // fallback display so country shows
+          if (costUsd <= 0) costUsd = 0.5;
 
-          const oKey = `${product}-${c.code}`;
-          const oKey2 = `${String(service).toLowerCase()}-${c.code}`;
-          const override = overrideMap[oKey] ?? overrideMap[oKey2];
+          const override =
+            overrideFor("smspva", product, c.code) ??
+            overrideFor("smspva", service, c.code);
           const priceNaira =
             override != null
               ? Number(override)
-              : calcNairaFromUsd(costUsd, rate, markup);
+              : calcNairaFromUsd(costUsd, smspvaUsdNgn, smspvaMarkup);
 
           countries.push({
             id: c.code,
@@ -302,90 +185,194 @@ export async function GET(req: NextRequest) {
             successRate: 100,
             stock: count > 0 ? count : 1,
             priceUsd: costUsd,
+            // internal only — client may pass back on buy
+            _provider: "smspva",
           });
         } catch {
-          /* skip country */
+          /* skip */
         }
       }
 
       countries.sort((a, b) => a.name.localeCompare(b.name));
       return NextResponse.json({
-        provider: "smspva",
+        mode: "real",
         service,
-        product,
         countries,
         total: countries.length,
-        pricing: { markupPercent: markup, usdNgnRate: rate },
       });
     }
 
-    // ——— SMSPool only below ———
-    if (!process.env.SMSPOOL_API_KEY) {
-      return NextResponse.json({
-        provider: "smspool",
-        service,
-        countries: [],
-        total: 0,
-      });
+    // ——— VOIP / VIRTUAL = SMSPool + 5sim, pick better per country ———
+    type Cand = {
+      id: string | number;
+      code: string;
+      name: string;
+      priceNaira: number;
+      finalNaira: number;
+      successRate: number;
+      stock: number;
+      priceUsd?: number;
+      _provider: "smspool" | "fivesim";
+    };
+
+    const byCode = new Map<string, Cand>();
+
+    // SMSPool
+    if (process.env.SMSPOOL_API_KEY) {
+      try {
+        const res = await getSuccessRate(service);
+        const rates = Array.isArray(res)
+          ? res
+          : Array.isArray(res?.data)
+          ? res.data
+          : [];
+        for (const r of rates) {
+          const code = String(
+            r.short_name || r.country || r.ID || ""
+          ).toUpperCase();
+          const name = r.name || r.country_name || prettyName(code);
+          const success = Number(r.success_rate ?? r.success ?? 0);
+          const priceUsd = Number(r.price ?? r.cost ?? 0);
+          if (!code || success < MIN_SUCCESS) continue;
+          const override =
+            overrideFor("smspool", service, code) ??
+            overrideFor("smspool", String(service).toLowerCase(), code);
+          const priceNaira =
+            override != null
+              ? Number(override)
+              : calculateNairaPrice(
+                  priceUsd,
+                  smspoolMarkup,
+                  null,
+                  null,
+                  usdNgnRate
+                );
+          const cand: Cand = {
+            id: r.ID || r.id || code,
+            code,
+            name,
+            priceNaira,
+            finalNaira: priceNaira,
+            successRate: success,
+            stock: Number(r.stock ?? 1),
+            priceUsd,
+            _provider: "smspool",
+          };
+          const prev = byCode.get(code);
+          if (
+            !prev ||
+            cand.successRate > prev.successRate ||
+            (cand.successRate === prev.successRate && cand.stock > prev.stock)
+          ) {
+            byCode.set(code, cand);
+          }
+        }
+      } catch (e) {
+        console.error("voip smspool availability", e);
+      }
     }
 
-    let rates: any[] = [];
+    // 5sim
     try {
-      const res = await getSuccessRate(service);
-      rates = Array.isArray(res)
-        ? res
-        : Array.isArray(res?.data)
-        ? res.data
-        : [];
-    } catch (e) {
-      console.error("success_rate error", e);
-    }
+      const product = normalizeFiveSimProduct(service);
+      let raw: any = null;
+      try {
+        raw = await getPricesByProductGuest(product);
+      } catch {
+        /* */
+      }
+      let byCountry: Record<string, any> = {};
+      if (raw && typeof raw === "object") {
+        if (raw[product] && typeof raw[product] === "object") {
+          byCountry = raw[product];
+        } else {
+          byCountry = raw;
+        }
+      }
+      if (Object.keys(byCountry).length === 0) {
+        try {
+          const all = await listPricesGuest();
+          for (const [country, products] of Object.entries(all || {})) {
+            const p = (products as any)?.[product];
+            if (p) byCountry[country] = p;
+          }
+        } catch {
+          /* */
+        }
+      }
 
-    const countries = rates
-      .map((r: any) => {
-        const code = String(
-          r.short_name || r.country || r.ID || ""
-        ).toUpperCase();
-        const name = r.name || r.country_name || code;
-        const success = Number(r.success_rate ?? r.success ?? 0);
-        const priceUsd = Number(r.price ?? r.cost ?? 0);
-        if (!code || success < MIN_SUCCESS) return null;
-        const oKey = `${String(service).toLowerCase()}-${code}`;
-        const override = overrideMap[oKey];
+      for (const [country, operators] of Object.entries(byCountry)) {
+        if (!operators || typeof operators !== "object") continue;
+        let bestCost = Infinity;
+        let bestCount = 0;
+        if ((operators as any).cost != null) {
+          bestCost = Number((operators as any).cost);
+          bestCount = Number((operators as any).count || 0);
+        } else {
+          for (const op of Object.values(operators as any)) {
+            if (!op || typeof op !== "object") continue;
+            const cost = Number((op as any).cost);
+            const count = Number((op as any).count || 0);
+            if (Number.isNaN(cost) || count <= 0) continue;
+            if (cost < bestCost) {
+              bestCost = cost;
+              bestCount = count;
+            }
+          }
+        }
+        if (!(bestCost < Infinity) || bestCount <= 0) continue;
+
+        // Normalize 5sim country slug → ISO-ish code for merge
+        const slug = String(country).toLowerCase();
+        let code = String(country).toUpperCase().slice(0, 3);
+        if (slug === "usa" || slug === "us") code = "US";
+        else if (slug === "england" || slug === "uk") code = "UK";
+        else if (slug.length === 2) code = slug.toUpperCase();
+        else code = slug.toUpperCase().slice(0, 2);
+
+        const name = prettyName(slug, country);
+        const override =
+          overrideFor("fivesim", product, code) ??
+          overrideFor("fivesim", service, code);
         const priceNaira =
           override != null
             ? Number(override)
-            : calculateNairaPrice(
-                priceUsd,
-                smspoolMarkup,
-                null,
-                null,
-                usdNgnRate
-              );
-        return {
-          id: r.ID || r.id || code,
+            : calcNairaFromFiveSimUsd(bestCost, fivesimUsdNgn, fivesimMarkup);
+
+        const cand: Cand = {
+          id: country,
           code,
           name,
           priceNaira,
           finalNaira: priceNaira,
-          successRate: success,
-          stock: r.stock ?? 1,
-          priceUsd,
+          successRate: 85, // 5sim has no success % in this feed — treat as solid mid-high
+          stock: bestCount,
+          priceUsd: bestCost,
+          _provider: "fivesim",
         };
-      })
-      .filter(Boolean)
-      .sort((a: any, b: any) => b.successRate - a.successRate);
+        const prev = byCode.get(code);
+        if (
+          !prev ||
+          cand.successRate > prev.successRate ||
+          (cand.successRate === prev.successRate && cand.stock > prev.stock)
+        ) {
+          byCode.set(code, cand);
+        }
+      }
+    } catch (e) {
+      console.error("voip fivesim availability", e);
+    }
+
+    const countries = Array.from(byCode.values()).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
 
     return NextResponse.json({
-      provider: "smspool",
+      mode: "voip",
       service,
       countries,
       total: countries.length,
       minSuccessRate: MIN_SUCCESS,
-      pricing: {
-        markupPercent: smspoolMarkup,
-        usdNgnRate,
-      },
     });
   } catch (error: any) {
     console.error("Availability error:", error);
