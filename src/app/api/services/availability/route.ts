@@ -11,6 +11,7 @@ import {
   SMSPVA_COUNTRIES,
   normalizeSmspvaService,
   getServicePriceUsd,
+  getCountryServicePrices,
   getCount,
   calcNairaFromUsd,
 } from "@/lib/smspva";
@@ -136,58 +137,65 @@ export async function GET(req: NextRequest) {
 
     // ——— REAL NUMBERS = SMSPVA only (never say SMSPVA to client) ———
     if (mode === "real") {
-      const product = normalizeSmspvaService(service);
+      const product = normalizeSmspvaService(service).toLowerCase();
       const countries: any[] = [];
 
-      for (const c of SMSPVA_COUNTRIES) {
-        try {
-          let costUsd = 0;
-          let count = 0;
-          try {
-            costUsd = await getServicePriceUsd(c.code, product);
-          } catch {
-            /* */
-          }
-          try {
-            const countRes = await getCount(c.code, product);
-            // Count only — never treat "response" success flag as price
-            const n = Number(
-              countRes?.online ?? countRes?.total ?? countRes?.count ?? 0
-            );
-            if (!Number.isNaN(n) && n > 0) count = n;
-            // legacy: response can be a count string like "76"
-            if (count <= 0 && countRes?.response != null) {
-              const r = Number(countRes.response);
-              if (!Number.isNaN(r) && r > 1 && r < 1000000) count = r;
+      // Parallel batch (limit concurrency) — min operator price per country
+      const batchSize = 8;
+      for (let i = 0; i < SMSPVA_COUNTRIES.length; i += batchSize) {
+        const batch = SMSPVA_COUNTRIES.slice(i, i + batchSize);
+        const results = await Promise.all(
+          batch.map(async (c) => {
+            try {
+              const priceMap = await getCountryServicePrices(c.code);
+              const hit = priceMap.get(product);
+              let costUsd = hit?.minUsd || 0;
+              if (costUsd <= 0) {
+                costUsd = await getServicePriceUsd(c.code, product);
+              }
+              if (costUsd <= 0) return null;
+
+              let count = 1;
+              try {
+                const countRes = await getCount(c.code, product);
+                const n = Number(
+                  countRes?.online ?? countRes?.total ?? countRes?.count ?? 0
+                );
+                if (!Number.isNaN(n) && n > 0) count = n;
+                else if (countRes?.response != null) {
+                  const r = Number(countRes.response);
+                  if (!Number.isNaN(r) && r > 1 && r < 1_000_000) count = r;
+                }
+              } catch {
+                /* keep 1 */
+              }
+
+              const override =
+                overrideFor("smspva", product, c.code) ??
+                overrideFor("smspva", service, c.code);
+              const priceNaira =
+                override != null
+                  ? Number(override)
+                  : calcNairaFromUsd(costUsd, smspvaUsdNgn, smspvaMarkup);
+
+              return {
+                id: c.code,
+                code: c.code,
+                name: c.name,
+                priceNaira,
+                finalNaira: priceNaira,
+                successRate: 100,
+                stock: count,
+                priceUsd: costUsd,
+                _provider: "smspva",
+              };
+            } catch {
+              return null;
             }
-          } catch {
-            /* */
-          }
-          // Need a real USD price to list; skip guesswork that inflates Naira
-          if (costUsd <= 0) continue;
-
-          const override =
-            overrideFor("smspva", product, c.code) ??
-            overrideFor("smspva", service, c.code);
-          const priceNaira =
-            override != null
-              ? Number(override)
-              : calcNairaFromUsd(costUsd, smspvaUsdNgn, smspvaMarkup);
-
-          countries.push({
-            id: c.code,
-            code: c.code,
-            name: c.name,
-            priceNaira,
-            finalNaira: priceNaira,
-            successRate: 100,
-            stock: count > 0 ? count : 1,
-            priceUsd: costUsd,
-            // internal only — client may pass back on buy
-            _provider: "smspva",
-          });
-        } catch {
-          /* skip */
+          })
+        );
+        for (const row of results) {
+          if (row) countries.push(row);
         }
       }
 
@@ -195,8 +203,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         mode: "real",
         service,
+        product,
         countries,
         total: countries.length,
+        pricing: {
+          markupPercent: smspvaMarkup,
+          usdNgnRate: smspvaUsdNgn,
+          note: "Uses cheapest operator price (same as SMSPVA 'from $X')",
+        },
       });
     }
 
