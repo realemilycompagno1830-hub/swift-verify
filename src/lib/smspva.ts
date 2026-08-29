@@ -309,24 +309,93 @@ export async function getServicePrice(country: string, service: string) {
   });
 }
 
-/** Returns USD price only (0 if unknown). Prefers modern API; takes lowest sane price. */
+/**
+ * Min USD among base price + all operator prices from one service row.
+ * SMSPVA website "from $1.75" is the cheapest operator; single-price
+ * endpoints often return a higher default (e.g. $3.02).
+ */
+function minPriceFromRow(row: any): number {
+  if (!row || typeof row !== "object") return 0;
+  const vals: number[] = [];
+  for (const key of ["p", "price", "Price", "cost"]) {
+    if (row[key] != null) {
+      const n = normalizeActivationUsd(parseUsdPrice(row[key]));
+      if (n > 0) vals.push(n);
+    }
+  }
+  const po = row.po || row.operators || row.MobileOperators;
+  if (po && typeof po === "object") {
+    for (const v of Object.values(po)) {
+      const n = normalizeActivationUsd(parseUsdPrice(v));
+      if (n > 0) vals.push(n);
+    }
+  }
+  if (!vals.length) return 0;
+  return Math.min(...vals);
+}
+
+/**
+ * All service prices for a country (modern).
+ * GET /activation/serviceprice/{country}
+ * → data: [{ s, sd, c, p, po: { OpName: "0.58", ... } }, ...]
+ */
+export async function getCountryServicePrices(
+  country: string
+): Promise<Map<string, { minUsd: number; baseUsd: number }>> {
+  const c = normalizeSmspvaCountry(country);
+  const map = new Map<string, { minUsd: number; baseUsd: number }>();
+  try {
+    const json = await modernGet(`/activation/serviceprice/${c}`);
+    const rows = Array.isArray(json?.data)
+      ? json.data
+      : Array.isArray(json)
+      ? json
+      : [];
+    for (const row of rows) {
+      const sid = String(row.s || row.Service || row.service || "").toLowerCase();
+      if (!sid) continue;
+      const minUsd = minPriceFromRow(row);
+      const baseUsd = normalizeActivationUsd(
+        parseUsdPrice(row.p ?? row.price ?? row.Price)
+      );
+      if (minUsd > 0) map.set(sid, { minUsd, baseUsd: baseUsd || minUsd });
+    }
+  } catch (e) {
+    console.error("SMSPVA country prices", c, e);
+  }
+  return map;
+}
+
+/** Returns lowest operator USD price for service+country (0 if unknown). */
 export async function getServicePriceUsd(
   country: string,
   service: string
 ): Promise<number> {
   const c = normalizeSmspvaCountry(country);
-  const s = normalizeSmspvaService(service);
+  const s = normalizeSmspvaService(service).toLowerCase();
 
-  // 1) Modern: /activation/serviceprice/{country}/{service}
+  // 1) Country bulk prices — take MIN over operators (matches website "from $X")
+  try {
+    const map = await getCountryServicePrices(c);
+    const hit = map.get(s);
+    if (hit && hit.minUsd > 0) return hit.minUsd;
+  } catch {
+    /* fall through */
+  }
+
+  // 2) Single service modern
   try {
     const json = await modernGet(`/activation/serviceprice/${c}/${s}`);
-    const p = normalizeActivationUsd(parseUsdPrice(json?.data ?? json));
+    const data = json?.data ?? json;
+    const min = minPriceFromRow(data);
+    if (min > 0) return min;
+    const p = normalizeActivationUsd(parseUsdPrice(data));
     if (p > 0) return p;
   } catch {
     /* fall through */
   }
 
-  // 2) Legacy get_service_price
+  // 3) Legacy
   try {
     const res = await getServicePrice(c, s);
     const p = normalizeActivationUsd(parseUsdPrice(res));
