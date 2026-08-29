@@ -251,7 +251,47 @@ export async function getCount(country: string, service: string) {
   return legacyGet({ metod: "get_count", country: c, service: s });
 }
 
-/** Price for service+country (USD string often) */
+/** Extract a sane USD price from SMSPVA API payloads */
+export function parseUsdPrice(payload: any): number {
+  if (payload == null) return 0;
+  if (typeof payload === "number" && payload > 0) return payload;
+  if (typeof payload === "string") {
+    const n = Number(payload.replace(",", ".").replace(/[^0-9.]/g, ""));
+    return !Number.isNaN(n) && n > 0 ? n : 0;
+  }
+  // Prefer explicit price fields only — NEVER use "response" (often "1" = success)
+  const candidates = [
+    payload.price,
+    payload.Price,
+    payload.data?.price,
+    payload.cost,
+    payload.data?.cost,
+  ];
+  for (const c of candidates) {
+    if (c == null) continue;
+    const n = Number(String(c).replace(",", "."));
+    if (!Number.isNaN(n) && n > 0) return n;
+  }
+  return 0;
+}
+
+/**
+ * Normalize to realistic USD activation price.
+ * SMSPVA website shows ~$0.50–$5 for most SMS activations.
+ * If value looks like cents (e.g. 175), convert; if absurd, reject.
+ */
+export function normalizeActivationUsd(raw: number): number {
+  if (!raw || Number.isNaN(raw) || raw <= 0) return 0;
+  let usd = raw;
+  // 50–5000 often means cents
+  if (usd >= 50 && usd <= 5000) usd = usd / 100;
+  // Still absurd for a single SMS activation
+  if (usd > 25) return 0;
+  if (usd < 0.01) return 0;
+  return usd;
+}
+
+/** Price for service+country (USD) */
 export async function getServicePrice(country: string, service: string) {
   const c = normalizeSmspvaCountry(country);
   const s = normalizeSmspvaService(service);
@@ -260,6 +300,19 @@ export async function getServicePrice(country: string, service: string) {
     country: c,
     service: s,
   });
+}
+
+/** Returns USD price only (0 if unknown) */
+export async function getServicePriceUsd(
+  country: string,
+  service: string
+): Promise<number> {
+  try {
+    const res = await getServicePrice(country, service);
+    return normalizeActivationUsd(parseUsdPrice(res));
+  } catch {
+    return 0;
+  }
 }
 
 /**
