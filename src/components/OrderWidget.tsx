@@ -10,6 +10,8 @@ export interface ServiceOption {
   finalNaira: number;
   label: string;
   baseUsd?: number;
+  mode?: "voip" | "real";
+  providerHint?: string;
 }
 
 interface ServiceItem {
@@ -24,6 +26,7 @@ interface CountryItem {
   finalNaira?: number;
   successRate?: number;
   priceUsd?: number;
+  _provider?: string;
 }
 
 interface OrderWidgetProps {
@@ -34,6 +37,7 @@ interface OrderWidgetProps {
 const FLAG_MAP: Record<string, string> = {
   US: "🇺🇸",
   GB: "🇬🇧",
+  UK: "🇬🇧",
   NG: "🇳🇬",
   CA: "🇨🇦",
   AU: "🇦🇺",
@@ -104,6 +108,7 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
   const [overrides, setOverrides] = useState<Record<string, number>>({});
   const [globalMarkup, setGlobalMarkup] = useState(150);
   const [usdNgnRate, setUsdNgnRate] = useState(1600);
+  const [numberMode, setNumberMode] = useState<"voip" | "real">("voip");
 
   const [selectedService, setSelectedService] = useState<ServiceItem | null>(
     null
@@ -148,7 +153,7 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
       try {
         setLoading(true);
         setError(null);
-        const res = await fetch("/api/services");
+        const res = await fetch(`/api/services?mode=${numberMode}`);
         if (!res.ok) throw new Error("Failed to load services");
         const data = await res.json();
         if (cancelled) return;
@@ -169,7 +174,7 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [numberMode]);
 
   // When service changes → load countries with stock
   useEffect(() => {
@@ -193,7 +198,9 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
         const q = encodeURIComponent(
           selectedService!.name || selectedService!.id
         );
-        const res = await fetch(`/api/services/availability?service=${q}`);
+        const res = await fetch(
+          `/api/services/availability?service=${q}&mode=${numberMode}`
+        );
         const data = await res.json();
 
         if (cancelled) return;
@@ -213,6 +220,7 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
           finalNaira: Number(c.priceNaira ?? c.finalNaira ?? 0),
           successRate: c.successRate ?? c.success_rate,
           priceUsd: c.priceUsd ?? c.costUsd,
+          _provider: c._provider,
         }));
 
         if (list.length === 0) {
@@ -241,7 +249,7 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
     return () => {
       cancelled = true;
     };
-  }, [selectedService, allCountries]);
+  }, [selectedService, allCountries, numberMode]);
 
   const filteredServices = useMemo(() => {
     const q = serviceQuery.trim().toLowerCase();
@@ -325,6 +333,8 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
         finalNaira: currentPrice,
         label: `${selectedService.name} (${selectedCountry.code}) - ₦${currentPrice.toLocaleString()}`,
         baseUsd: selectedCountry.priceUsd,
+        mode: numberMode,
+        providerHint: selectedCountry._provider,
       };
       await onBuy(option);
     } finally {
@@ -367,6 +377,63 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
       <div className="space-y-4 mb-5">
         {/* SERVICE — one searchable box */}
         <div ref={serviceWrapRef} className="relative">
+
+        {/* Number type: VOIP vs Real — no supplier names */}
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-gray-700">Number type</p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setNumberMode("voip");
+                setSelectedService(null);
+                setSelectedCountry(null);
+                setServiceQuery("");
+                setCountryQuery("");
+              }}
+              className={`rounded-xl border px-3 py-2.5 text-left transition ${
+                numberMode === "voip"
+                  ? "border-red-500 bg-red-50 ring-1 ring-red-500"
+                  : "border-gray-200 bg-white"
+              }`}
+            >
+              <span className="block text-sm font-semibold text-gray-900">
+                Virtual / VOIP
+              </span>
+              <span className="block text-xs text-gray-500 mt-0.5">
+                Cheaper · faster · may fail more often
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setNumberMode("real");
+                setSelectedService(null);
+                setSelectedCountry(null);
+                setServiceQuery("");
+                setCountryQuery("");
+              }}
+              className={`rounded-xl border px-3 py-2.5 text-left transition ${
+                numberMode === "real"
+                  ? "border-red-500 bg-red-50 ring-1 ring-red-500"
+                  : "border-gray-200 bg-white"
+              }`}
+            >
+              <span className="block text-sm font-semibold text-gray-900">
+                Real numbers
+              </span>
+              <span className="block text-xs text-gray-500 mt-0.5">
+                Higher success · costs more
+              </span>
+            </button>
+          </div>
+          <p className="text-xs text-gray-500 leading-snug">
+            {numberMode === "voip"
+              ? "Virtual numbers are budget-friendly but codes can fail. We auto-pick the stronger source when both have stock."
+              : "Real SIM-style numbers cost more but usually deliver codes more reliably."}
+          </p>
+        </div>
+
           <label className="block text-sm font-medium text-gray-700 mb-1.5">
             Service
           </label>
