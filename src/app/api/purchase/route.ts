@@ -19,6 +19,8 @@ export async function POST(req: NextRequest) {
       countryCode,
       countryName,
       priceNaira,
+      mode, // voip | real
+      providerHint, // smspool | fivesim | smspva from availability
     } = body;
 
     if (!serviceName || !countryCode || !priceNaira) {
@@ -39,15 +41,22 @@ export async function POST(req: NextRequest) {
 
     const admin = createAdminClient();
 
-    // Active SMS provider from settings
-    const { data: provRow } = await admin
-      .from("site_settings")
-      .select("value")
-      .eq("key", "sms_provider")
-      .maybeSingle();
-    const raw = provRow?.value?.active;
-    const provider: "smspool" | "fivesim" | "smspva" =
-      raw === "fivesim" ? "fivesim" : raw === "smspva" ? "smspva" : "smspool";
+    // Customer mode + optional hint from availability (auto-pick for VOIP)
+    let provider: "smspool" | "fivesim" | "smspva" = "smspool";
+    if (mode === "real" || providerHint === "smspva") {
+      provider = "smspva";
+    } else if (providerHint === "fivesim" || providerHint === "smspool") {
+      provider = providerHint;
+    } else {
+      const { data: provRow } = await admin
+        .from("site_settings")
+        .select("value")
+        .eq("key", "sms_provider")
+        .maybeSingle();
+      const raw = provRow?.value?.active;
+      provider =
+        raw === "fivesim" ? "fivesim" : raw === "smspva" ? "smspva" : "smspool";
+    }
 
     const { data: profile, error: profileErr } = await admin
       .from("profiles")
