@@ -10,7 +10,7 @@ import {
 import {
   SMSPVA_COUNTRIES,
   normalizeSmspvaService,
-  getServicePrice,
+  getServicePriceUsd,
   getCount,
   calcNairaFromUsd,
 } from "@/lib/smspva";
@@ -144,29 +144,27 @@ export async function GET(req: NextRequest) {
           let costUsd = 0;
           let count = 0;
           try {
-            const priceRes = await getServicePrice(c.code, product);
-            const p = Number(
-              priceRes?.price ?? priceRes?.data?.price ?? priceRes?.response
-            );
-            if (!Number.isNaN(p) && p > 0) costUsd = p;
+            costUsd = await getServicePriceUsd(c.code, product);
           } catch {
             /* */
           }
           try {
             const countRes = await getCount(c.code, product);
+            // Count only — never treat "response" success flag as price
             const n = Number(
-              countRes?.online ??
-                countRes?.total ??
-                countRes?.count ??
-                countRes?.response ??
-                0
+              countRes?.online ?? countRes?.total ?? countRes?.count ?? 0
             );
-            if (!Number.isNaN(n)) count = n;
+            if (!Number.isNaN(n) && n > 0) count = n;
+            // legacy: response can be a count string like "76"
+            if (count <= 0 && countRes?.response != null) {
+              const r = Number(countRes.response);
+              if (!Number.isNaN(r) && r > 1 && r < 1000000) count = r;
+            }
           } catch {
             /* */
           }
-          if (costUsd <= 0 && count <= 0) continue;
-          if (costUsd <= 0) costUsd = 0.5;
+          // Need a real USD price to list; skip guesswork that inflates Naira
+          if (costUsd <= 0) continue;
 
           const override =
             overrideFor("smspva", product, c.code) ??
