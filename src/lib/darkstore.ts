@@ -31,10 +31,36 @@ function extractError(json: any, fallback: string): string {
   ];
   for (const c of candidates) {
     if (c != null && String(c).trim() && String(c).toUpperCase() !== "OK") {
-      return String(c).trim();
+      return translateSupplierError(String(c).trim());
     }
   }
   return fallback;
+}
+
+/** Map common Russian supplier messages to clear English for customers */
+export function translateSupplierError(msg: string): string {
+  const m = String(msg || "");
+  const lower = m.toLowerCase();
+  if (/невозможно создать заказ|попробуйте позже/.test(lower)) {
+    return "Supplier could not create the order right now. Check supplier balance/stock, wait 30 seconds, and try again.";
+  }
+  if (/товар не найден|not found/.test(lower)) {
+    return "Product not found at supplier. Re-sync products or pick another one.";
+  }
+  if (/недостаточно|insufficient|balance|баланс/.test(lower)) {
+    return "Supplier wallet balance is too low. Top up the supplier account and try again.";
+  }
+  if (/нет в наличии|out of stock|quantity|количеств/.test(lower)) {
+    return "Out of stock at supplier.";
+  }
+  if (/минимальн|minimum/.test(lower)) {
+    return "Order quantity is below the supplier minimum. Try a higher quantity.";
+  }
+  if (/429|too many|rate/.test(lower)) {
+    return "Supplier rate limit. Wait a few seconds and try again.";
+  }
+  // keep original if not mapped (still useful)
+  return m;
 }
 
 async function parseJson(res: Response): Promise<any> {
@@ -158,24 +184,40 @@ export async function createOrder(
   };
   if (idempotenceId) params.idempotence_id = idempotenceId;
 
-  let json: any;
-  let lastErr: Error | null = null;
-
-  // Prefer GET (documented example URL), then POST
-  try {
-    json = await darkGet("/order/create", params);
-  } catch (e1: any) {
-    lastErr = e1 instanceof Error ? e1 : new Error(String(e1?.message || e1));
+  async function attempt(): Promise<any> {
+    let json: any;
+    let lastErr: Error | null = null;
     try {
-      json = await darkPost("/order/create", params);
-      lastErr = null;
-    } catch (e2: any) {
-      lastErr = e2 instanceof Error ? e2 : new Error(String(e2?.message || e2));
+      json = await darkGet("/order/create", params);
+    } catch (e1: any) {
+      lastErr = e1 instanceof Error ? e1 : new Error(String(e1?.message || e1));
+      try {
+        json = await darkPost("/order/create", params);
+        lastErr = null;
+      } catch (e2: any) {
+        lastErr = e2 instanceof Error ? e2 : new Error(String(e2?.message || e2));
+      }
     }
+    if (lastErr && !json) throw lastErr;
+    return json;
   }
 
-  if (lastErr && !json) {
-    throw lastErr;
+  let json: any;
+  try {
+    json = await attempt();
+  } catch (e1: any) {
+    const msg = String(e1?.message || "");
+    // Retry once after delay for "try later" / rate-limit style errors
+    if (/try again|later|rate|позже|невозможно создать/i.test(msg)) {
+      await new Promise((r) => setTimeout(r, 3000));
+      // new idempotence on retry so we don't hit a stuck failed key
+      if (idempotenceId) {
+        params.idempotence_id = `${idempotenceId}_r${Date.now()}`;
+      }
+      json = await attempt();
+    } else {
+      throw e1;
+    }
   }
 
   const data = json?.data ?? json;
@@ -187,9 +229,11 @@ export async function createOrder(
   const status = String(data?.status || json?.status || "").toLowerCase();
   const link = data?.link ?? json?.link ?? null;
 
-  // success:true with pending is valid (delivery later)
   if (orderId == null && !link && status !== "ok" && status !== "pending") {
-    console.error("DarkStore createOrder unexpected response", JSON.stringify(json).slice(0, 800));
+    console.error(
+      "DarkStore createOrder unexpected response",
+      JSON.stringify(json).slice(0, 800)
+    );
     throw new Error(
       extractError(
         json,
