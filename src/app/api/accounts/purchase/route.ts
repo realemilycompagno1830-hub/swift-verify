@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import {
   calcNairaFromRub,
   createOrder,
+  getBalance as getDarkBalance,
   softOrderDownload,
   softOrderStatus,
 } from "@/lib/darkstore";
@@ -12,7 +13,9 @@ function publicError(msg: string) {
   return String(msg || "Order failed")
     .replace(/dark\s*store/gi, "supplier")
     .replace(/darkstore/gi, "supplier")
-    .replace(/smspool/gi, "provider");
+    .replace(/dark\.shopping/gi, "supplier")
+    .replace(/smspool/gi, "provider")
+    .slice(0, 280);
 }
 
 async function tryFetchDelivery(orderId: string | number) {
@@ -45,6 +48,13 @@ async function tryFetchDelivery(orderId: string | number) {
       }
       return { deliveryLink, deliveryText, status: "completed" };
     }
+
+    // Sometimes create response already had link in status payload
+    const stLink = stData?.link;
+    if (stLink) {
+      deliveryLink = String(stLink);
+      return { deliveryLink, deliveryText, status: "completed" };
+    }
   }
   return { deliveryLink, deliveryText, status: "pending" };
 }
@@ -57,6 +67,13 @@ export async function POST(req: NextRequest) {
 
     if (!productId) {
       return NextResponse.json({ error: "Missing product" }, { status: 400 });
+    }
+
+    if (!process.env.DARKSTORE_API_KEY) {
+      return NextResponse.json(
+        { error: "Account supplier is not configured. Contact support." },
+        { status: 503 }
+      );
     }
 
     const supabase = await createClient();
@@ -77,29 +94,52 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (prodErr || !product) {
-      return NextResponse.json({ error: "Product not available" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Product not found or inactive" },
+        { status: 404 }
+      );
     }
+
     if (Number(product.stock) < quantity) {
       return NextResponse.json(
-        { error: "Out of stock. Try another product." },
+        { error: "Not enough stock for this product" },
         { status: 400 }
       );
     }
 
-    const { data: pricingRow } = await admin
+    // Optional: warn if supplier balance looks empty (non-blocking if API fails)
+    try {
+      const { balance: dsBal } = await getDarkBalance();
+      if (dsBal <= 0) {
+        console.error("DarkStore balance is 0 or negative:", dsBal);
+        return NextResponse.json(
+          {
+            error:
+              "Supplier account has no balance. Top up the supplier wallet, then try again.",
+          },
+          { status: 503 }
+        );
+      }
+    } catch (balErr: any) {
+      console.error("Could not read supplier balance", balErr?.message);
+      // continue — order may still work
+    }
+
+    const { data: marginRow } = await admin
       .from("site_settings")
       .select("value")
-      .eq("key", "accounts_pricing")
-      .single();
+      .eq("key", "accounts_margin")
+      .maybeSingle();
 
-    const rate = Number(pricingRow?.value?.rub_ngn_rate ?? 18);
-    const markup = Number(pricingRow?.value?.markup_percent ?? 100);
-    const unitPrice = calcNairaFromRub(
-      Number(product.cost_rub),
-      rate,
-      markup,
-      product.override_price_naira
-    );
+    const markup = Number(marginRow?.value?.markup_percent ?? 50);
+    const rubNgn = Number(marginRow?.value?.rub_ngn_rate ?? 18);
+
+    const unitPrice =
+      product.override_price_naira != null &&
+      Number(product.override_price_naira) > 0
+        ? Number(product.override_price_naira)
+        : calcNairaFromRub(Number(product.cost_rub) || 0, rubNgn, markup);
+
     const total = unitPrice * quantity;
     const displayName = product.display_name || product.name;
 
@@ -162,15 +202,16 @@ export async function POST(req: NextRequest) {
       return restored;
     };
 
-    let dsResult: any;
+    let created: Awaited<ReturnType<typeof createOrder>>;
     try {
-      dsResult = await createOrder(
+      created = await createOrder(
         Number(product.darkstore_id),
         quantity,
         `sv_${user.id}_${product.darkstore_id}_${Date.now()}`
       );
     } catch (e: any) {
       const msg = publicError(e?.message || "Supplier order failed");
+      console.error("createOrder failed", e?.message, e);
       await refund(msg);
       await admin.from("account_orders").insert({
         user_id: user.id,
@@ -180,47 +221,41 @@ export async function POST(req: NextRequest) {
         quantity,
         cost_naira: total,
         status: "refunded",
-        error_message: msg.slice(0, 500),
+        error_message: msg.slice(0, 300),
       });
-      const stockish = /stock|наличии|available/i.test(msg);
       return NextResponse.json(
         {
-          error: stockish
-            ? "Out of stock at supplier. Your wallet was refunded."
-            : `Order failed: ${msg}. Your wallet was refunded.`,
+          error: `Order failed: ${msg}. Your wallet was refunded.`,
         },
         { status: 400 }
       );
     }
 
-    const data = dsResult?.data || dsResult;
-    const orderIdRaw =
-      data?.id ??
-      data?.order_id ??
-      data?.orderId ??
-      dsResult?.id ??
-      dsResult?.order_id;
-    const orderId = orderIdRaw != null ? String(orderIdRaw) : null;
-    let deliveryLink =
-      data?.link || data?.download_link || dsResult?.link
-        ? String(data?.link || data?.download_link || dsResult?.link)
-        : null;
+    const orderId = created.orderId;
+    let deliveryLink = created.link;
     let deliveryText: string | null = null;
-    let finalStatus = "pending";
+    let finalStatus = created.status || "pending";
 
-    if (data?.status === "ok" || data?.status === "completed") {
-      finalStatus = "completed";
-    }
-
-    if (orderId) {
-      const got = await tryFetchDelivery(orderId);
-      if (got.deliveryLink) deliveryLink = got.deliveryLink;
-      if (got.deliveryText) deliveryText = got.deliveryText;
-      if (got.status === "completed" || deliveryLink || deliveryText) {
-        finalStatus = "completed";
+    // If we already have a download link from create, try to read the file
+    if (deliveryLink) {
+      try {
+        const fileRes = await fetch(deliveryLink, { cache: "no-store" });
+        if (fileRes.ok) {
+          const text = (await fileRes.text()).trim();
+          if (text && text.length < 80000) deliveryText = text;
+        }
+      } catch {
+        /* keep link only */
       }
-      if (["canceled", "error", "refund"].includes(got.status)) {
-        await refund(`Supplier status: ${got.status}`);
+      finalStatus = "completed";
+    } else if (orderId) {
+      const got = await tryFetchDelivery(orderId);
+      deliveryLink = got.deliveryLink;
+      deliveryText = got.deliveryText;
+      finalStatus = got.status;
+
+      if (["canceled", "cancelled", "error", "refund"].includes(got.status)) {
+        await refund(`Supplier: ${got.status}`);
         await admin.from("account_orders").insert({
           user_id: user.id,
           product_id: product.id,
@@ -239,7 +274,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ALWAYS save order row when DarkStore accepted payment
+    if (!orderId && !deliveryLink) {
+      await refund("No order id from supplier");
+      return NextResponse.json(
+        {
+          error:
+            "Order failed: supplier did not return an order id. Your wallet was refunded.",
+        },
+        { status: 400 }
+      );
+    }
+
     const { data: saved, error: saveErr } = await admin
       .from("account_orders")
       .insert({
@@ -259,7 +304,6 @@ export async function POST(req: NextRequest) {
 
     if (saveErr) {
       console.error("account_orders insert failed", saveErr);
-      // Still return delivery if we have it — critical for user
       return NextResponse.json({
         success: true,
         warning:
