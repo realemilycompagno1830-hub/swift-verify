@@ -38,7 +38,7 @@ export async function POST() {
     // Pull a few pages of in-stock products
     for (let page = 1; page <= 12; page++) {
       const res = await listProducts({
-        only_in_stock: true,
+        only_in_stock: 1,
         page,
         perPage: 100,
       });
