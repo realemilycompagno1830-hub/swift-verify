@@ -112,14 +112,20 @@ export async function listProducts(opts: {
   perPage?: number;
   name?: string;
   category_id?: number;
-  only_in_stock?: number;
+  only_in_stock?: number | boolean;
 } = {}) {
+  const onlyInStock =
+    opts.only_in_stock === true
+      ? 1
+      : opts.only_in_stock === false
+      ? 0
+      : opts.only_in_stock;
   return darkGet("/product/list", {
     page: opts.page || 1,
     "per-page": opts.perPage || 50,
     name: opts.name,
     category_id: opts.category_id,
-    only_in_stock: opts.only_in_stock,
+    only_in_stock: onlyInStock,
   });
 }
 
