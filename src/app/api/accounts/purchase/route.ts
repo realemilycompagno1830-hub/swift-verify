@@ -6,6 +6,7 @@ import {
   getBalance as getDarkBalance,
   softOrderDownload,
   softOrderStatus,
+  viewProduct,
 } from "@/lib/darkstore";
 
 /** Never expose supplier brand names to end users */
@@ -107,7 +108,37 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Optional: warn if supplier balance looks empty (non-blocking if API fails)
+    // Live check on supplier: min order, stock, price
+    let liveMinOrder = 1;
+    let liveQty = Number(product.stock);
+    let livePriceRub = Number(product.cost_rub) || 0;
+    try {
+      const live = await viewProduct(Number(product.darkstore_id));
+      const raw = live?.data ?? live;
+      liveMinOrder = Math.max(1, Number(raw?.minimum_order ?? 1) || 1);
+      liveQty = Number(raw?.quantity ?? raw?.count ?? raw?.stock ?? liveQty);
+      livePriceRub = Number(raw?.price ?? raw?.cost ?? livePriceRub) || livePriceRub;
+      if (liveQty <= 0) {
+        return NextResponse.json(
+          { error: "Out of stock at supplier right now. Try another product." },
+          { status: 400 }
+        );
+      }
+    } catch (liveErr: any) {
+      console.error("viewProduct failed", liveErr?.message);
+      // continue with stored data
+    }
+
+    if (quantity < liveMinOrder) {
+      return NextResponse.json(
+        {
+          error: `Supplier requires a minimum of ${liveMinOrder} for this product. Increase quantity and try again.`,
+          minimumOrder: liveMinOrder,
+        },
+        { status: 400 }
+      );
+    }
+
     try {
       const { balance: dsBal } = await getDarkBalance();
       if (dsBal <= 0) {
@@ -120,9 +151,18 @@ export async function POST(req: NextRequest) {
           { status: 503 }
         );
       }
+      // Rough check: balance must cover RUB cost * qty
+      const needRub = livePriceRub * quantity;
+      if (needRub > 0 && dsBal < needRub) {
+        return NextResponse.json(
+          {
+            error: `Supplier wallet is too low for this product (needs ~${needRub.toFixed(0)} on supplier, has ${dsBal.toFixed(0)}). Top up supplier balance.`,
+          },
+          { status: 503 }
+        );
+      }
     } catch (balErr: any) {
       console.error("Could not read supplier balance", balErr?.message);
-      // continue — order may still work
     }
 
     const { data: marginRow } = await admin
