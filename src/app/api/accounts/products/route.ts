@@ -40,12 +40,10 @@ export async function GET() {
       category: p.category_name || "Other",
       imageUrl: p.image_url,
       stock: p.stock,
-      priceNaira: calcNairaFromRub(
-        Number(p.cost_rub),
-        rate,
-        markup,
-        p.override_price_naira
-      ),
+      priceNaira:
+        p.override_price_naira != null && Number(p.override_price_naira) > 0
+          ? Math.ceil(Number(p.override_price_naira))
+          : calcNairaFromRub(Number(p.cost_rub), rate, markup),
     }));
 
     const preferred = ["facebook", "instagram", "tiktok"];
