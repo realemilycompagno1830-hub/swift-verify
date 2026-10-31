@@ -48,7 +48,10 @@ export async function GET(_req: NextRequest) {
       const seen = new Set<string>();
       for (const s of list) {
         const name = String(s.name || s.service || s.title || "").trim();
-        const id = String(s.ID || s.id || s.service || name).trim();
+        // Prefer numeric SMSPool ID — required for success_rate / purchase
+        const id = String(
+          s.ID ?? s.id ?? s.service_id ?? s.service ?? name
+        ).trim();
         if (!name || seen.has(name.toLowerCase())) continue;
         seen.add(name.toLowerCase());
         services.push({ id, name });
