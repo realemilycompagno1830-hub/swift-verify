@@ -1,31 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { purchaseSMS } from "@/lib/smspool";
-import {
-  buyActivation,
-  normalizeFiveSimCountry,
-  normalizeFiveSimProduct,
-} from "@/lib/fivesim";
-import { getNumber as smspvaGetNumber } from "@/lib/smspva";
+import { purchaseSMS, calculateNairaPrice } from "@/lib/smspool";
 
-const EXPIRE_MS = 15 * 60 * 1000;
+const EXPIRE_MS = 15 * 60 * 1000; // 15 minutes
 
+/**
+ * SMSPool-only number purchase.
+ * Deducts wallet → buys number → saves order → returns phone for OTP polling.
+ */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const {
-      serviceName,
       serviceId,
+      serviceName,
       countryCode,
       countryName,
       priceNaira,
-      mode, // voip | real
-      providerHint, // smspool | fivesim | smspva from availability
     } = body;
 
-    if (!serviceName || !countryCode || !priceNaira) {
+    if (!serviceName || !countryCode) {
       return NextResponse.json(
-        { error: "Missing required fields" },
+        { error: "Service and country are required" },
         { status: 400 }
       );
     }
@@ -34,64 +30,79 @@ export async function POST(req: NextRequest) {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-
     if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json({ error: "Please log in first" }, { status: 401 });
     }
 
     const admin = createAdminClient();
 
-    // Customer mode + optional hint from availability (auto-pick for VOIP)
-    let provider: "smspool" | "fivesim" | "smspva" = "smspool";
-    if (mode === "real" || providerHint === "smspva") {
-      provider = "smspva";
-    } else if (providerHint === "fivesim" || providerHint === "smspool") {
-      provider = providerHint;
-    } else {
-      const { data: provRow } = await admin
-        .from("site_settings")
-        .select("value")
-        .eq("key", "sms_provider")
-        .maybeSingle();
-      const raw = provRow?.value?.active;
-      provider =
-        raw === "fivesim" ? "fivesim" : raw === "smspva" ? "smspva" : "smspool";
+    // Pricing from admin config
+    const { data: marginRow } = await admin
+      .from("site_settings")
+      .select("value")
+      .eq("key", "global_margin")
+      .maybeSingle();
+
+    const globalMarkup = Number(
+      marginRow?.value?.markup_percent ?? marginRow?.value?.percent ?? 150
+    );
+    const usdNgnRate = Number(marginRow?.value?.usd_ngn_rate ?? 1600);
+
+    // Override price if set
+    let cost = Number(priceNaira) || 0;
+    try {
+      const { data: ov } = await admin
+        .from("price_overrides")
+        .select("*")
+        .or("provider.eq.smspool,provider.is.null");
+      for (const o of ov || []) {
+        const s = String(o.service_name || o.service_id || "").toLowerCase();
+        const c = String(o.country_code || "").toUpperCase();
+        if (
+          s === String(serviceName).toLowerCase() &&
+          c === String(countryCode).toUpperCase() &&
+          o.price_naira != null
+        ) {
+          cost = Number(o.price_naira);
+          break;
+        }
+      }
+    } catch {
+      /* optional */
     }
 
-    const { data: profile, error: profileErr } = await admin
+    if (!cost || cost <= 0) {
+      cost = calculateNairaPrice(0.2, globalMarkup, null, null, usdNgnRate);
+    }
+    cost = Math.ceil(cost);
+
+    const { data: profile } = await admin
       .from("profiles")
       .select("balance")
       .eq("id", user.id)
       .single();
 
-    if (profileErr || !profile) {
-      return NextResponse.json({ error: "Profile not found" }, { status: 404 });
-    }
-
-    const balance = Number(profile.balance);
-    const cost = Math.round(Number(priceNaira) * 100) / 100;
+    const balance = Number(profile?.balance ?? 0);
     if (balance < cost) {
       return NextResponse.json(
-        { error: "Insufficient balance", balance, required: cost },
-        { status: 402 }
+        {
+          error: `Insufficient balance. You need ₦${cost.toLocaleString()}. Fund your wallet first.`,
+          need: cost,
+          balance,
+          requireFund: true,
+        },
+        { status: 400 }
       );
     }
 
-    // Deduct only if still has enough (soft race guard)
+    // Deduct wallet first
     const newBalance = Math.round((balance - cost) * 100) / 100;
-    const { data: deducted, error: updateErr } = await admin
+    const { error: balErr } = await admin
       .from("profiles")
       .update({ balance: newBalance, updated_at: new Date().toISOString() })
-      .eq("id", user.id)
-      .gte("balance", cost)
-      .select("balance")
-      .maybeSingle();
-
-    if (updateErr || !deducted) {
-      return NextResponse.json(
-        { error: "Insufficient balance or could not deduct" },
-        { status: 402 }
-      );
+      .eq("id", user.id);
+    if (balErr) {
+      return NextResponse.json({ error: "Could not update wallet" }, { status: 500 });
     }
 
     await admin.from("transactions").insert({
@@ -99,79 +110,56 @@ export async function POST(req: NextRequest) {
       type: "purchase",
       amount: -cost,
       balance_after: newBalance,
-      description: `Purchase ${serviceName} (${countryCode}) via ${provider}`,
-      metadata: { serviceName, countryCode, priceNaira: cost, provider },
+      description: `Purchase ${serviceName} (${countryCode})`,
+      reference: `sms_${user.id}_${Date.now()}`,
+      metadata: { serviceName, countryCode, priceNaira: cost, provider: "smspool" },
     });
 
-    let externalOrderId: string | null = null;
-    let phoneNumber: string | null = null;
-    let status = "pending";
-
+    // Resolve SMSPool service id
+    let poolService: string | number = serviceId || serviceName;
     try {
-      if (provider === "smspva") {
-        if (!process.env.SMSPVA_API_KEY) {
-          throw new Error("SMSPVA is selected but SMSPVA_API_KEY is not set");
-        }
-        const result = await smspvaGetNumber(
-          String(countryCode || countryName || ""),
-          String(serviceId || serviceName || "")
-        );
-        externalOrderId = result.id;
-        phoneNumber = result.number;
-        if (!externalOrderId) throw new Error("SMSPVA did not return an order id");
-        status = "waiting_sms";
-      } else if (provider === "fivesim") {
-        if (!process.env.FIVESIM_API_KEY) {
-          throw new Error("5sim is selected but FIVESIM_API_KEY is not set");
-        }
-        const country = normalizeFiveSimCountry(
-          String(countryCode || countryName || "")
-        );
-        const product = normalizeFiveSimProduct(
-          String(serviceId || serviceName || "")
-        );
-        const result = await buyActivation(country, product, "any");
-        externalOrderId =
-          result?.id != null ? String(result.id) : null;
-        phoneNumber = result?.phone || result?.number || null;
-        if (!externalOrderId) {
-          throw new Error(
-            result?.message || "Supplier did not return an order id"
-          );
-        }
-        status = "waiting_sms";
-      } else {
-        if (!process.env.SMSPOOL_API_KEY) {
-          // Demo
-          externalOrderId = `DEMO_${Date.now()}`;
-          phoneNumber = `+1${Math.floor(1000000000 + Math.random() * 9000000000)}`;
-          status = "waiting_sms";
-        } else {
-          const smspoolResult = await purchaseSMS({
-            country: countryCode,
-            service: serviceId || serviceName,
-            pricing_option: 1,
-          });
-          externalOrderId =
-            smspoolResult?.order_id ||
-            smspoolResult?.orderid ||
-            smspoolResult?.id ||
-            null;
-          phoneNumber =
-            smspoolResult?.number ||
-            smspoolResult?.phonenumber ||
-            smspoolResult?.phone ||
-            null;
-          if (!externalOrderId) {
-            throw new Error(
-              smspoolResult?.message || "Supplier did not return an order id"
-            );
-          }
-          status = "waiting_sms";
+      const { data: manuals } = await admin
+        .from("sms_manual_services")
+        .select("*")
+        .or("provider.eq.smspool,provider.is.null");
+      for (const m of manuals || []) {
+        const name = String(m.name || m.service_name || "").toLowerCase();
+        if (name === String(serviceName).toLowerCase() && m.service_id) {
+          poolService = m.service_id;
+          break;
         }
       }
+    } catch {
+      /* optional */
+    }
+
+    let externalOrderId = "";
+    let phoneNumber = "";
+    let status = "waiting_sms";
+
+    try {
+      const result = await purchaseSMS({
+        country: countryCode,
+        service: poolService,
+        pricing_option: 1, // highest success
+      });
+
+      externalOrderId = String(
+        result?.order_id || result?.orderid || result?.id || ""
+      );
+      phoneNumber = String(
+        result?.number || result?.phone || result?.phonenumber || ""
+      );
+
+      if (!externalOrderId || !phoneNumber) {
+        throw new Error(
+          result?.message ||
+            result?.error ||
+            "SMSPool did not return a number. Try another country."
+        );
+      }
     } catch (smsErr: any) {
-      // Exact refund of what was deducted — once
+      // Refund
       const { data: profile2 } = await admin
         .from("profiles")
         .select("balance")
@@ -227,7 +215,7 @@ export async function POST(req: NextRequest) {
         cost_naira: cost,
         status,
         expires_at: expiresAt,
-        provider,
+        provider: "smspool",
       })
       .select()
       .single();
@@ -243,7 +231,7 @@ export async function POST(req: NextRequest) {
       status,
       expires_at: expiresAt,
       newBalance,
-      provider,
+      provider: "smspool",
     });
   } catch (err: any) {
     console.error("Purchase error", err);
