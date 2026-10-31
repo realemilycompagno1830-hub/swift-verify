@@ -191,11 +191,15 @@ export default function OrderWidget({ onBuy, disabled }: OrderWidgetProps) {
       setCountryQuery("");
 
       try {
-        const q = encodeURIComponent(
-          selectedService!.name || selectedService!.id
-        );
+        const sid = String(selectedService!.id || "");
+        const sname = String(selectedService!.name || "");
+        const params = new URLSearchParams();
+        if (sid) params.set("serviceId", sid);
+        if (sname) params.set("serviceName", sname);
+        // also keep service= for older handlers
+        params.set("service", sid || sname);
         const res = await fetch(
-          `/api/services/availability?service=${encodeURIComponent(q)}`
+          `/api/services/availability?${params.toString()}`
         );
         const data = await res.json();
 
