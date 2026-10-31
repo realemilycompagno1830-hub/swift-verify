@@ -44,16 +44,12 @@ export async function GET() {
         .order("created_at", { ascending: false }),
     ]);
 
-    const active = PROVIDERS.includes(settings?.value?.active)
-      ? settings!.value.active
-      : "smspool";
-
     return NextResponse.json({
       provider: {
-        active,
+        active: "smspool",
         smspool_enabled: true,
-        fivesim_enabled: true,
-        smspva_enabled: true,
+        fivesim_enabled: false,
+        smspva_enabled: false,
       },
       manuals: manuals || [],
       env: {
@@ -79,10 +75,10 @@ export async function POST(req: NextRequest) {
       await admin.from("site_settings").upsert({
         key: "sms_provider",
         value: {
-          active,
+          active: "smspool",
           smspool_enabled: true,
-          fivesim_enabled: true,
-          smspva_enabled: true,
+          fivesim_enabled: false,
+          smspva_enabled: false,
         },
         updated_at: new Date().toISOString(),
       });
