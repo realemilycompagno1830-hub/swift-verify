@@ -53,10 +53,33 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const paymentProvider =
-    (typeof process !== "undefined" &&
-      process.env.NEXT_PUBLIC_PAYMENT_PROVIDER) ||
-    "paystack";
+  const [paymentProvider, setPaymentProvider] = useState<"paystack" | "flutterwave">(
+    "paystack"
+  );
+  const [paystackPublicKey, setPaystackPublicKey] = useState(
+    process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || ""
+  );
+  const [flutterwavePublicKey, setFlutterwavePublicKey] = useState(
+    process.env.NEXT_PUBLIC_FLUTTERWAVE_PUBLIC_KEY || ""
+  );
+
+  // Load active gateway from server (admin can switch without redeploy)
+  useEffect(() => {
+    fetch("/api/payments/config")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.provider === "flutterwave" || data.provider === "paystack") {
+          setPaymentProvider(data.provider);
+        }
+        if (data.provider === "flutterwave" && data.publicKey) {
+          setFlutterwavePublicKey(data.publicKey);
+        }
+        if (data.provider === "paystack" && data.publicKey) {
+          setPaystackPublicKey(data.publicKey);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const refreshUser = useCallback(async () => {
     const supabase = createClient();
@@ -204,7 +227,7 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
         return;
       }
 
-      const publicKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY;
+      const publicKey = paystackPublicKey || process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY;
       if (!publicKey) {
         reject(new Error("Paystack public key is missing. Check Vercel environment variables."));
         return;
@@ -262,9 +285,9 @@ export default function PurchaseFlow({ children }: PurchaseFlowProps) {
         return;
       }
 
-      const publicKey = process.env.NEXT_PUBLIC_FLUTTERWAVE_PUBLIC_KEY;
+      const publicKey = flutterwavePublicKey || process.env.NEXT_PUBLIC_FLUTTERWAVE_PUBLIC_KEY;
       if (!publicKey) {
-        reject(new Error("Flutterwave public key is missing."));
+        reject(new Error("Flutterwave public key is missing. Add NEXT_PUBLIC_FLUTTERWAVE_PUBLIC_KEY in Vercel."));
         return;
       }
 
