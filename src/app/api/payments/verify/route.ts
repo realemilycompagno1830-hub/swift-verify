@@ -4,7 +4,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 /**
  * POST /api/payments/verify
  * Verifies a payment and credits the user wallet.
- * Supports Paystack and Flutterwave.
+ * Currently supports Flutterwave (primary) and Paystack (fallback).
  *
  * Body: { reference, amount?, provider? }
  */
@@ -17,10 +17,27 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing reference" }, { status: 400 });
     }
 
-    const provider =
+    let provider =
       bodyProvider ||
       process.env.PAYMENT_PROVIDER ||
+      process.env.NEXT_PUBLIC_PAYMENT_PROVIDER ||
       "paystack";
+
+    // Prefer admin DB switch when client did not send provider
+    if (!bodyProvider) {
+      try {
+        const adminPeek = createAdminClient();
+        const { data: row } = await adminPeek
+          .from("site_settings")
+          .select("value")
+          .eq("key", "payment_provider")
+          .maybeSingle();
+        const a = row?.value?.active;
+        if (a === "paystack" || a === "flutterwave") provider = a;
+      } catch {
+        /* keep env default */
+      }
+    }
 
     const supabase = await createClient();
     const {
@@ -35,51 +52,8 @@ export async function POST(req: NextRequest) {
     let rawTx: any = null;
     let gatewayName = provider;
 
-    // ---------- Paystack verification ----------
-    if (provider === "paystack") {
-      const secret = process.env.PAYSTACK_SECRET_KEY;
-      if (!secret) {
-        return NextResponse.json(
-          { error: "Paystack is not configured" },
-          { status: 500 }
-        );
-      }
-
-      const verifyRes = await fetch(
-        `https://api.paystack.co/transaction/verify/${encodeURIComponent(
-          reference
-        )}`,
-        {
-          headers: {
-            Authorization: `Bearer ${secret}`,
-          },
-        }
-      );
-
-      const verifyData = await verifyRes.json();
-
-      if (!verifyRes.ok || verifyData.status !== true) {
-        return NextResponse.json(
-          { error: verifyData.message || "Paystack verification failed" },
-          { status: 400 }
-        );
-      }
-
-      const tx = verifyData.data;
-      if (tx.status !== "success") {
-        return NextResponse.json(
-          { error: `Transaction status: ${tx.status}` },
-          { status: 400 }
-        );
-      }
-
-      paidNaira = tx.amount / 100; // kobo → naira
-      rawTx = tx;
-      gatewayName = "paystack";
-    }
-
     // ---------- Flutterwave verification ----------
-    else if (provider === "flutterwave") {
+    if (provider === "flutterwave") {
       const secret = process.env.FLUTTERWAVE_SECRET_KEY;
       if (!secret) {
         return NextResponse.json(
@@ -88,6 +62,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      // Verify by tx_ref
       const verifyRes = await fetch(
         `https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=${encodeURIComponent(
           reference
@@ -127,6 +102,49 @@ export async function POST(req: NextRequest) {
       paidNaira = Number(tx.amount);
       rawTx = tx;
       gatewayName = "flutterwave";
+    }
+
+    // ---------- Paystack verification (kept for later switch) ----------
+    else if (provider === "paystack") {
+      const secret = process.env.PAYSTACK_SECRET_KEY;
+      if (!secret) {
+        return NextResponse.json(
+          { error: "Paystack is not configured" },
+          { status: 500 }
+        );
+      }
+
+      const verifyRes = await fetch(
+        `https://api.paystack.co/transaction/verify/${encodeURIComponent(
+          reference
+        )}`,
+        {
+          headers: {
+            Authorization: `Bearer ${secret}`,
+          },
+        }
+      );
+
+      const verifyData = await verifyRes.json();
+
+      if (!verifyRes.ok || verifyData.status !== true) {
+        return NextResponse.json(
+          { error: verifyData.message || "Paystack verification failed" },
+          { status: 400 }
+        );
+      }
+
+      const tx = verifyData.data;
+      if (tx.status !== "success") {
+        return NextResponse.json(
+          { error: `Transaction status: ${tx.status}` },
+          { status: 400 }
+        );
+      }
+
+      paidNaira = tx.amount / 100; // kobo → naira
+      rawTx = tx;
+      gatewayName = "paystack";
     } else {
       return NextResponse.json(
         { error: `Unsupported payment provider: ${provider}` },
